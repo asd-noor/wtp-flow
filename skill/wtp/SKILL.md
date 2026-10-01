@@ -1,6 +1,6 @@
 ---
 name: wtp
-description: Manage Git worktrees with the `wtp` CLI (Worktree Plus) - create, list, switch to, run commands in, and remove worktrees, plus configure .wtp.yml post-create hooks that copy .env files, symlink directories, or run setup commands. Use when the user wants parallel branches checked out side by side, an isolated checkout for a feature, hotfix, PR review or agent task, or mentions worktrees or wtp.
+description: Manage Git worktrees with the `wtp` CLI (Worktree Plus) - create, list, switch to, run commands in, and remove worktrees, plus configure .wtp.yml post-create hooks that copy .env files, symlink directories, or run setup commands. Use when the user wants parallel branches checked out side by side, an isolated checkout for ad-hoc work, PR review or an agent task, or mentions worktrees or wtp. Not for git-flow style start/finish of work, release or hotfix branches in a repo that uses wtp-flow (wtpflow.* git config); use the wtp-flow skill for those.
 license: MIT
 compatibility: Requires git and the wtp binary (github.com/satococoa/wtp) on PATH. Written against wtp 2.10.x.
 metadata:
@@ -11,6 +11,8 @@ metadata:
 # Git worktrees with wtp
 
 `wtp` wraps `git worktree` with predictable paths, automatic remote-branch tracking, and setup hooks defined in `.wtp.yml`. Run it from inside the repository (any worktree of it).
+
+> **In a repo that uses wtp-flow** (`git config --get wtpflow.branch.develop` prints a value), manage `work/`, `release/` and `hotfix/` branches and the worktree directory through the `wtp-flow` skill (`wtp-flow <type> start|finish|delete`, `wtp-flow config basedir`, `wtp-flow relocate`). Do not create or remove those branches with the raw commands below: that skips the flow's base branch, tagging and merges. Use this skill for everything else (hooks, `wtp list`, `wtp exec`, other branches). The `feature/...` and `hotfix/...` names in the examples are generic.
 
 ## Quick reference
 
