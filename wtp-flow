@@ -314,6 +314,18 @@ exclude_wtp_yml() {
   say "Added .wtp.yml to .git/info/exclude."
 }
 
+# Does .wtp.yml already pin a base_dir?
+has_basedir() { [ -f "$MAIN/.wtp.yml" ] && grep -q '^[[:space:]]*base_dir:' "$MAIN/.wtp.yml"; }
+
+# What `init` writes when no worktree directory was given: $WTP_FLOW_PARENT/<repo dir name> if
+# WTP_FLOW_PARENT is set (so every repo keeps its worktrees under one parent, without name
+# clashes), else wtp's own default. Only `init` uses this; `config`/`relocate` read the real value.
+init_default_basedir() {
+  local p=${WTP_FLOW_PARENT:-}
+  [ -n "$p" ] || { printf '%s' "$DEFAULT_BASEDIR"; return; }
+  printf '%s/%s' "${p%/}" "$(basename "$(git -C "$MAIN" rev-parse --show-toplevel)")"
+}
+
 cmd_init() {
   local defaults=0 force=0 pw= pr= px= pt= wd= set_d=0
   pw=$P_WORK pr=$P_RELEASE px=$P_HOTFIX pt=$VTAG
@@ -361,7 +373,7 @@ cmd_init() {
     [ $set_x -eq 1 ] || ask px "Hotfix branches?" "$px"
     [ $set_t -eq 1 ] || ask pt "Version tag prefix?" "$pt"
     say
-    [ $set_d -eq 1 ] || { ask wd "Directory for worktrees (relative to the repo, or absolute)?" "$(get_basedir)"; set_d=1; }
+    [ $set_d -eq 1 ] || { ask wd "Directory for worktrees (relative to the repo, or absolute)?" "$(if has_basedir; then get_basedir; else init_default_basedir; fi)"; set_d=1; }
   fi
 
   [ "$m" != "$d" ] || die "Production and development branches must differ."
@@ -382,9 +394,11 @@ cmd_init() {
   if [ $set_d -eq 1 ]; then
     set_basedir "$wd"
     say "Worktrees will be created in '$(get_basedir)'."
-  elif [ ! -f "$MAIN/.wtp.yml" ]; then
-    set_basedir "$DEFAULT_BASEDIR"
-    say "Wrote .wtp.yml (worktrees live in $DEFAULT_BASEDIR)"
+  elif ! has_basedir; then
+    local fresh=0; [ -f "$MAIN/.wtp.yml" ] || fresh=1
+    set_basedir "$(init_default_basedir)"
+    if [ $fresh -eq 1 ]; then say "Wrote .wtp.yml (worktrees live in $(get_basedir))"
+    else say "Set base_dir in .wtp.yml (worktrees live in $(get_basedir))"; fi
   fi
 
   # The main worktree rests on develop, like git-flow leaves you.
@@ -808,6 +822,9 @@ EOF
 usage_init() {
   cat <<EOF
 usage: $PROG init [-d] [-f] [-p <work>] [-r <release>] [-x <hotfix>] [-t <tag>] [-w <worktree-dir>]
+
+Without -w the worktree directory defaults to \$WTP_FLOW_PARENT/<repo dir name> if WTP_FLOW_PARENT is
+set, else ../worktrees. An existing base_dir in .wtp.yml is never overridden by that default.
 EOF
 }
 

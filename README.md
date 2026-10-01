@@ -147,6 +147,12 @@ Stored by `wtp-flow init` in the repo's git config (`wtpflow.*`): `branch.master
 The location is wtp's `defaults.base_dir` in `.wtp.yml`, the single source of truth (per-machine: worktree directory, setup hooks). It is not meant to be shared, so `wtp-flow init` adds it to `.git/info/exclude` (repo-local, shared by all worktrees, never dirties the tree, and `.gitignore` is untouched). It skips this if the file is already ignored; a `.wtp.yml` that is already tracked is left alone with a note.
 Default `../worktrees`, so branch `work/login` lives in `../worktrees/work/login`.
 
+Set `WTP_FLOW_PARENT` (e.g. `export WTP_FLOW_PARENT=~/worktrees`) to keep every repo's worktrees under one parent:
+when `init` gets no `-w`, it writes `base_dir` as `$WTP_FLOW_PARENT/<repo directory name>`, so `~/code/api` gets
+`~/worktrees/api` and `~/code/web` gets `~/worktrees/web` without clashing. It is only the default `init` proposes
+(the prompt shows it): `-w` wins, an existing `base_dir` in `.wtp.yml` is never overridden, and it does not change
+what `config`/`relocate` report for a repo that has no `.wtp.yml`. A leading `~` or `$HOME` is expanded.
+
 - Set it with `wtp-flow init -w <dir>` (or answer the prompt), or later with `wtp-flow config basedir <dir>`.
   Editing `.wtp.yml` by hand works too. Relative paths resolve against the main worktree; absolute paths work. A leading `~` or `$HOME` is expanded to your home directory before it is written, because wtp itself would read it as relative to the repo root.
 - Changing it does not move existing worktrees. `wtp-flow relocate` does (`-n` for a dry run). It skips
