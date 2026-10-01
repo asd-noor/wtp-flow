@@ -16,7 +16,7 @@ Installs wtp-flow and its bash completion into your home directory (no root need
   --bin-dir DIR          where to put the wtp-flow script
   --completion-dir DIR   where to put the bash completion file
   --no-completion        skip the bash completion
-  --skills[=DIR]         also install the agent skills (wtp, wtp-flow) into DIR (default: ~/.pi/agent/skills)
+  --skills DIR           also install the agent skills (wtp, wtp-flow) into DIR (required: no default)
   --link                 symlink to this checkout instead of copying (updates with git pull)
   --force                overwrite files that do not look like wtp-flow's
   --uninstall            remove what this script installs (same options select the locations)
@@ -39,8 +39,8 @@ while [ $# -gt 0 ]; do
     --completion-dir) comp_dir=${2:?--completion-dir needs a directory}; shift ;;
     --completion-dir=*) comp_dir=${1#*=} ;;
     --no-completion)  do_comp=0 ;;
-    --skills)         do_skills=1 ;;
-    --skills=*)       do_skills=1; skills_dir=${1#*=} ;;
+    --skills)         do_skills=1; if [ $# -ge 2 ]; then skills_dir=$2; shift; fi ;;
+    --skills=*)       skills_dir=${1#*=}; do_skills=1 ;;
     --link)           link=1 ;;
     --force)          force=1 ;;
     --uninstall)      uninstall=1 ;;
@@ -58,7 +58,7 @@ if [ -n "$prefix" ]; then
 fi
 : "${bin_dir:=$HOME/.local/bin}"
 : "${comp_dir:=${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions}"
-: "${skills_dir:=$HOME/.pi/agent/skills}"
+[ $do_skills -eq 0 ] || { [ -n "$skills_dir" ] && [[ $skills_dir != -* ]] || die "--skills needs a directory (there is no default), e.g. --skills ~/.pi/agent/skills"; }
 bin_dir=$(expand "$bin_dir") comp_dir=$(expand "$comp_dir") skills_dir=$(expand "$skills_dir")
 
 SRC_BIN=$HERE/wtp-flow
