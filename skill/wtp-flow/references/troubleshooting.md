@@ -4,7 +4,7 @@
 |---------|---------|-----|
 | `Not a wtp-flow-enabled repo yet` | No `wtpflow.*` config, or `master`/`develop` missing. | `wtp-flow init -d` (a repo set up with real git-flow also needs this once; config keys differ). |
 | `wtp not found` | The `wtp` binary is not on PATH. | Install https://github.com/satococoa/wtp. |
-| `There were merge conflicts merging 'X' into 'Y'. Nothing was changed.` | The merge was aborted. | In the topic worktree: `git merge Y`, resolve, commit; re-run `finish`. |
+| `Could not merge 'X' into 'Y' (merge conflicts, or untracked files ...)` | The merge was aborted; nothing changed. Git's own message above says which. | Conflicts: in the topic worktree `git merge Y`, resolve, commit, re-run `finish`. "untracked working tree files would be overwritten": move or delete those files in Y's worktree, re-run. |
 | `Finish was aborted due to conflicts during rebase` | `finish -r` stopped mid-rebase in the worktree. | Resolve in that worktree, `git rebase --continue`, re-run `finish`. |
 | `Working tree '<path>' contains unstaged or uncommitted changes` | The topic worktree, or the worktree holding the target branch (`develop`/`master`, often the main checkout), has tracked changes. | Commit or stash there, re-run. Untracked files do not count. |
 | `There is an existing release/hotfix branch 'X'. Finish that one first.` | Only one of each may be open. | Finish or `delete` the open one (ask the user which). |

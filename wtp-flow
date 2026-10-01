@@ -167,8 +167,8 @@ _do_merge() {
 # merge_into TARGET SOURCE MODE(ff|noff|squash) [HINT]
 merge_into() {
   MI_SRC=$2 MI_MODE=$3
-  run_on "$1" _do_merge || die "There were merge conflicts merging '$2' into '$1'. Nothing was changed.
-${4:-Resolve them from the topic branch (git merge $1), then re-run the command.}"
+  run_on "$1" _do_merge || die "Could not merge '$2' into '$1' (merge conflicts, or untracked files in '$1' that the merge would overwrite; see git's output above). Nothing was changed.
+${4:-Fix it, then re-run the command: for conflicts run 'git merge $1' on the topic branch and resolve; for untracked files move or delete them.}"
 }
 
 # --------------------------------------------------------------- options ----
