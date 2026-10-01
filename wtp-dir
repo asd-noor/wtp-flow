@@ -17,7 +17,8 @@ Fuzzy-pick one of this repository's worktrees (from `wtp list`) with television 
 missing; the preview shows the path, `git status` and recent commits. The absolute path of the choice
 is printed on stdout.
 
-  QUERY       prefill the search; if exactly one worktree matches, it is selected without showing the UI
+  QUERY       if exactly one worktree matches (exact name, else substring, else fuzzy; case-insensitive) its
+              path is printed immediately, with no picker; otherwise the picker opens with QUERY prefilled
   shell-init  print a shell function `wtp-dir` that cd's into the choice (use: eval "$(wtp-dir shell-init)")
 
 Environment:
@@ -48,17 +49,37 @@ esac
 command -v wtp >/dev/null || die "wtp not found: https://github.com/satococoa/wtp"
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
 
-picker=${WTP_DIR_PICKER:-auto}
-case $picker in
-  auto)
-    if   command -v tv  >/dev/null; then picker=tv
-    elif command -v fzf >/dev/null; then picker=fzf
-    else die "neither tv (https://github.com/alexpasmantier/television) nor fzf found"; fi ;;
-  tv|fzf) command -v "$picker" >/dev/null || die "$picker not found (WTP_DIR_PICKER=$picker)" ;;
-  *) die "WTP_DIR_PICKER must be auto, tv or fzf (got '$picker')" ;;
-esac
-
 query=$*
+
+# Resolve QUERY to a single worktree without starting a picker (starting one only to have it exit
+# again shows as a flash). Case-insensitive, first tier with exactly one hit wins: exact name,
+# then substring, then fuzzy (letters in order). Several hits in a tier, or none at all: print
+# nothing, and the picker opens with the query prefilled.
+resolve_query() {
+  command wtp list -q 2>/dev/null | awk -v q="$query" '
+    BEGIN { lq = tolower(q) }
+    { n[NR] = $0; ln[NR] = tolower($0) }
+    END {
+      for (tier = 1; tier <= 3; tier++) {
+        c = 0; hit = ""
+        for (i = 1; i <= NR; i++) {
+          if (tier == 1)      ok = (ln[i] == lq)
+          else if (tier == 2) ok = (index(ln[i], lq) > 0)
+          else {
+            ok = 1; pos = 1
+            for (k = 1; k <= length(lq); k++) {
+              p = index(substr(ln[i], pos), substr(lq, k, 1))
+              if (!p) { ok = 0; break }
+              pos += p
+            }
+          }
+          if (ok) { c++; hit = n[i] }
+        }
+        if (c == 1) { print hit; exit }
+        if (c > 1) exit
+      }
+    }' || true
+}
 
 # The preview body, given the already-quoted worktree name in $1.
 # `command wtp`: the pickers run this through a shell; be immune to a `wtp` shell function from `wtp hook`.
@@ -70,17 +91,32 @@ printf "\n"
 git -c color.ui=always -C "$d" log --oneline --decorate -n 20'
 }
 
-if [ "$picker" = tv ]; then
-  args=(--source-command 'command wtp list -q' --no-sort --preview-command "$(preview_for "'{}'")" --preview-header '{}')
-  [ -z "$query" ] || args+=(--input "$query" --select-1)
-  # shellcheck disable=SC2086  # WTP_DIR_TV_ARGS is meant to be word-split
-  name=$(tv "${args[@]}" ${WTP_DIR_TV_ARGS:-}) || exit 1
-else
-  # fzf substitutes and shell-quotes {} itself, so no extra quotes here.
-  args=(--preview "$(preview_for '{}')" --preview-window 'right,55%' --header 'worktrees')
-  [ -z "$query" ] || args+=(--query "$query" --select-1)
-  # shellcheck disable=SC2086  # WTP_DIR_FZF_ARGS is meant to be word-split
-  name=$(command wtp list -q | fzf "${args[@]}" ${WTP_DIR_FZF_ARGS:-}) || exit 1
+name=
+[ -z "$query" ] || name=$(resolve_query)
+
+if [ -z "$name" ]; then
+  picker=${WTP_DIR_PICKER:-auto}
+  case $picker in
+    auto)
+      if   command -v tv  >/dev/null; then picker=tv
+      elif command -v fzf >/dev/null; then picker=fzf
+      else die "neither tv (https://github.com/alexpasmantier/television) nor fzf found"; fi ;;
+    tv|fzf) command -v "$picker" >/dev/null || die "$picker not found (WTP_DIR_PICKER=$picker)" ;;
+    *) die "WTP_DIR_PICKER must be auto, tv or fzf (got '$picker')" ;;
+  esac
+
+  if [ "$picker" = tv ]; then
+    args=(--source-command 'command wtp list -q' --no-sort --preview-command "$(preview_for "'{}'")" --preview-header '{}')
+    [ -z "$query" ] || args+=(--input "$query")
+    # shellcheck disable=SC2086  # WTP_DIR_TV_ARGS is meant to be word-split
+    name=$(tv "${args[@]}" ${WTP_DIR_TV_ARGS:-}) || exit 1
+  else
+    # fzf substitutes and shell-quotes {} itself, so no extra quotes here.
+    args=(--preview "$(preview_for '{}')" --preview-window 'right,55%' --header 'worktrees')
+    [ -z "$query" ] || args+=(--query "$query")
+    # shellcheck disable=SC2086  # WTP_DIR_FZF_ARGS is meant to be word-split
+    name=$(command wtp list -q | fzf "${args[@]}" ${WTP_DIR_FZF_ARGS:-}) || exit 1
+  fi
 fi
 
 name=$(printf '%s' "$name" | head -n1)

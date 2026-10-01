@@ -61,9 +61,13 @@ when `tv` is not installed. The preview shows the path, `git status` and the las
 
 ```sh
 cd "$(wtp-dir)"            # pick interactively
-cd "$(wtp-dir auth)"       # prefilled query; jumps straight there if exactly one worktree matches
+cd "$(wtp-dir auth)"       # jumps straight there if exactly one worktree matches; else opens the picker prefilled
 eval "$(wtp-dir shell-init)"   # in your shell rc: defines a wtp-dir function that does the cd for you
 ```
+
+A query is resolved before any picker starts, so an unambiguous one never flashes the picker's UI: case-insensitive,
+exact name first, then substring, then fuzzy (letters in order); the first of those with exactly one match wins. With
+several matches (or none), the picker opens with the query prefilled.
 
 Exits 1 if you cancel. Environment: `WTP_DIR_PICKER` (`auto`, `tv` or `fzf`; auto prefers tv),
 `WTP_DIR_TV_ARGS` / `WTP_DIR_FZF_ARGS` (extra arguments, e.g. `WTP_DIR_TV_ARGS="--inline"`,
