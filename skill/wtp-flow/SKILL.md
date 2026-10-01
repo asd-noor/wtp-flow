@@ -1,7 +1,7 @@
 ---
 name: wtp-flow
 description: Drives the wtp-flow CLI, a git-flow variant where every topic branch (work/*, release/*, hotfix/*) gets its own git worktree. Use when a repo uses wtp-flow (config keys `wtpflow.*`, a `.wtp.yml`), or when asked to start, finish, publish or clean up feature/bugfix/release/hotfix work with git-flow semantics in isolated worktrees, tag a release, ship a hotfix, or move worktrees to another directory.
-license: MIT
+license: GPL-3.0-or-later
 compatibility: Requires bash, git, wtp (github.com/satococoa/wtp) and the wtp-flow script on PATH; GNU realpath for `relocate`. Needs a shell that can run commands.
 metadata:
   version: "0.2"

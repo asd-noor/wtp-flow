@@ -120,3 +120,7 @@ Default `../worktrees`, so branch `work/login` lives in `../worktrees/work/login
 - If the back-merge into develop conflicts after master was merged and tagged, you are told to merge the
   tag by hand; re-running `finish` then fails on "tag already exists" (same as git-flow).
 - Signed tags (`-s`, `-u`) are untested. The only remote supported is `origin`.
+
+## License
+
+GPL-3.0-or-later (GNU GPL version 3 or, at your option, any later version). See [LICENSE](LICENSE).

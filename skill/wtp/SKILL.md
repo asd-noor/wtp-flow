@@ -1,7 +1,7 @@
 ---
 name: wtp
 description: Manage Git worktrees with the `wtp` CLI (Worktree Plus) - create, list, switch to, run commands in, and remove worktrees, plus configure .wtp.yml post-create hooks that copy .env files, symlink directories, or run setup commands. Use when the user wants parallel branches checked out side by side, an isolated checkout for ad-hoc work, PR review or an agent task, or mentions worktrees or wtp. Not for git-flow style start/finish of work, release or hotfix branches in a repo that uses wtp-flow (wtpflow.* git config); use the wtp-flow skill for those.
-license: MIT
+license: GPL-3.0-or-later
 compatibility: Requires git and the wtp binary (github.com/satococoa/wtp) on PATH. Written against wtp 2.10.x.
 metadata:
   upstream: https://github.com/satococoa/wtp
