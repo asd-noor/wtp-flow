@@ -131,7 +131,7 @@ put "$SRC_BIN" "$bin_dir/wtp-flow" 755 'wtp-flow'
 put "$SRC_DIR" "$bin_dir/wtp-dir" 755 'wtp-dir'
 [ $do_comp -eq 0 ] || put "$SRC_COMP" "$comp_dir/wtp-flow" 644 'wtp-flow'
 if [ $do_skills -eq 1 ]; then
-  for s in "${SKILLS[@]}"; do put_dir "$HERE/skill/$s" "$skills_dir/$s"; done
+  for s in "${SKILLS[@]}"; do put_dir "$HERE/skills/$s" "$skills_dir/$s"; done
 fi
 
 echo

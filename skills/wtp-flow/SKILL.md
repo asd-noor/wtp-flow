@@ -19,13 +19,16 @@ git-flow where work and hotfix branches live in their own worktrees (release swi
 
 ## Rules for agents
 
-1. **Never switch branches in the main checkout yourself** (`git checkout`/`switch` to a topic branch). Start
-   topic work with `wtp-flow <type> start`. `work` and `hotfix` get their own worktree; do the work there.
-   `release` is the exception: `release start` switches the main checkout onto `release/<version>` and you
-   work right there (it must be clean first).
+1. **Layout rule.** The main checkout holds only `master`, `develop` or a `release/*` branch; `work/*` and
+   `hotfix/*` live in their own worktrees. So never check out a `work/*` or `hotfix/*` branch in the main
+   checkout yourself (`git checkout`/`switch`): start them with `wtp-flow <type> start` and work in the worktree.
+   `release start` switches the main checkout onto `release/<version>` and you work right there (it must be clean
+   first). If you break the rule, `work|hotfix checkout` moves the branch out again.
 2. **Your shell does not keep a `cd`** between tool calls and `shell-init` is not loaded. Get the worktree
    path from output and use absolute paths or `git -C <path>` / `cd <path> && ...` in each command:
    ```sh
+   dir=$(wtp-flow switch login)          # also prints only the path; pass a name that matches exactly one row,
+                                         # since an ambiguous query opens an interactive picker (no terminal: fails)
    dir=$(wtp-flow work checkout login)   # prints only the path (creates the worktree if missing;
                                          # for release it switches the main checkout and prints its path)
    git -C "$dir" status

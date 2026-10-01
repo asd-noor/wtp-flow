@@ -11,6 +11,7 @@ without its prefix; for `release`/`hotfix` it is the version. With no name, `fin
 | `init [-d] [-f] [-p <work>] [-r <release>] [-x <hotfix>] [-t <tagprefix>] [-w <dir>]` | Create `master` and `develop`, store `wtpflow.*` git config, write `.wtp.yml`. `-d` = no prompts (use this). `-f` = reinitialise. `-w` = worktree directory. Without `-w`, the directory defaults to `$WTP_FLOW_PARENT/<repo dir name>` if that env var is set, else `../worktrees`; an existing `base_dir` is never overridden. |
 | `config` | Show branch names, prefixes, tag prefix, worktree directory. |
 | `config basedir [<dir>]` | Show or set `defaults.base_dir` in `.wtp.yml`. Does not move existing worktrees. |
+| `switch [query]` (alias `checkout [query]`) | Go to where a branch lives and print that directory. Rows: `@` (main checkout), `work/*`/`hotfix/*` worktrees (created if missing), and `master`/`develop`/`release/*` (moves the main checkout onto it; it must be clean). A query matching exactly one row (exact, substring, then fuzzy) is used immediately; otherwise an interactive tv/fzf picker opens, which fails without a terminal. |
 | `relocate [-n]` | Move topic worktrees to `<base_dir>/<branch>`. `-n` = dry run. Skips locked/missing/occupied; refuses if cwd is inside one that would move. |
 | `shell-init` | Prints a shell function that follows worktrees with `cd`. For humans; not useful to agents. |
 

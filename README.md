@@ -76,7 +76,7 @@ Exits 1 if you cancel. Environment: `WTP_DIR_PICKER` (`auto`, `tv` or `fzf`; aut
 
 ## Use it from an AI agent
 
-`skill/wtp-flow/` is an [Agent Skill](https://agentskills.io) (`SKILL.md` plus `references/`). Copy or symlink the
+`skills/wtp-flow/` is an [Agent Skill](https://agentskills.io) (`SKILL.md` plus `references/`). Copy or symlink the
 `wtp-flow` directory into your agent's skills folder (`./install.sh --skills DIR`, e.g. `~/.pi/agent/skills`, or `~/.claude/skills` for Claude Code).
 It teaches the agent the branch model, to work inside worktrees rather than switching branches, to stay
 non-interactive, and to leave pushing to you.
@@ -94,6 +94,9 @@ wtp-flow release finish -m "1.2.0" # merge to master, tag 1.2.0, merge the tag i
 
 wtp-flow hotfix start 1.2.1        # hotfix/1.2.1 off master
 wtp-flow hotfix finish -p          # same as release finish, then push develop, master and the tag
+
+wtp-flow switch                    # pick where to go: main checkout, a worktree, or move main onto master/develop/release
+wtp-flow switch login              # unambiguous query: goes straight there, no picker
 ```
 
 ## Commands
@@ -102,6 +105,7 @@ wtp-flow hotfix finish -p          # same as release finish, then push develop, 
 wtp-flow init [-d] [-f] [-p <work>] [-r <release>] [-x <hotfix>] [-t <tag>] [-w <worktree-dir>]
 wtp-flow config [basedir [<dir>]]
 wtp-flow relocate [-n]
+wtp-flow switch [QUERY]            # alias: wtp-flow checkout [QUERY]
 wtp-flow shell-init
 
 wtp-flow work    list [-v]
@@ -160,6 +164,36 @@ what `config`/`relocate` report for a repo that has no `.wtp.yml`. A leading `~`
   worktree it would move.
 - Old and new locations can coexist: wtp-flow always asks git where a worktree actually is.
 - wtp hooks (`post_create`: copy `.env`, `npm install`, ...) in `.wtp.yml` run for every new worktree.
+
+## Where branches live
+
+| Branch | Lives in |
+|--------|----------|
+| `master`, `develop`, `release/*` | the **main checkout** (it rests on `develop`; `release start` moves it onto the release branch, `finish` moves it back) |
+| `work/*`, `hotfix/*` | **their own worktrees** (`<base_dir>/<branch>`) |
+
+`wtp-flow` keeps to this. If a `work/*` or `hotfix/*` branch ends up checked out in the main checkout (say via a
+plain `git checkout`), `checkout`, `rebase` and `pull` move the main checkout back (`develop` for work, `master` for
+hotfix; it must be clean) and give the branch a worktree of its own, with a one-line note on stderr.
+
+## switch: go where a branch lives
+
+`wtp-flow switch [QUERY]` (alias `wtp-flow checkout [QUERY]`; the per-type `work|release|hotfix checkout <name>` stays)
+is one command for moving around, built on the layout above. Its rows are:
+
+- `@`, the main checkout, labelled with its current branch;
+- every `work/*` and `hotfix/*` worktree;
+- `master`, `develop` and `release/*` branches the main checkout is not on: selecting one **moves the main checkout
+  onto it** (it must have no uncommitted changes);
+- `work/*` and `hotfix/*` branches without a worktree: selecting one creates it.
+
+It prints the directory (and with `eval "$(wtp-flow shell-init)"` your shell cd's there). A `QUERY` is matched
+case-insensitively, exact name first, then substring, then fuzzy; if exactly one row matches it is used at once
+(no picker UI flashes up), otherwise a picker opens with the query prefilled: [television](https://github.com/alexpasmantier/television)
+(`tv`), or `fzf` if `tv` is missing. `@` also matches the branch the main checkout is on, so `wtp-flow switch develop`
+means "the main checkout" while it is on `develop`. Environment: `WTP_FLOW_PICKER` (`auto`, `tv`, `fzf`),
+`WTP_FLOW_TV_ARGS`, `WTP_FLOW_FZF_ARGS`. It is independent of the standalone `wtp-dir` below, which works for
+any wtp repo.
 
 ## Differences from git-flow, all due to worktrees
 

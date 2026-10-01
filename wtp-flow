@@ -113,8 +113,19 @@ add_worktree() {
   printf '%s\n' "$out" | tail -n1
 }
 
+# Layout rule: the main checkout only ever holds master, develop or a release/* branch; work/* and
+# hotfix/* branches get their own worktree. If one was checked out in the main checkout by hand,
+# move the main checkout back to the branch it came from (hotfix: master, work: develop).
+evacuate_main() { # branch
+  local to=$DEVELOP
+  case $1 in "$P_HOTFIX"*) to=$MASTER ;; esac
+  switch_main "$to"
+  printf "Note: '%s' was checked out in the main checkout; it is back on '%s' and '%s' gets its own worktree.\n" "$1" "$to" "$1" >&2
+}
+
 ensure_worktree() {
   local d; d=$(worktree_of "$1")
+  if [ "$d" = "$MAIN" ]; then evacuate_main "$1"; d=; fi
   [ -n "$d" ] || d=$(add_worktree "$1")
   printf '%s\n' "$d"
 }
@@ -130,9 +141,8 @@ switch_main() {
 # Where a topic branch lives: its worktree, or for release the main worktree (switching it).
 topic_dir() { # kind branch
   local d; d=$(worktree_of "$2")
-  if [ -z "$d" ]; then
-    if [ "$1" = release ]; then switch_main "$2"; d=$MAIN; else d=$(add_worktree "$2"); fi
-  fi
+  if [ "$1" != release ]; then ensure_worktree "$2"; return; fi
+  if [ -z "$d" ]; then switch_main "$2"; d=$MAIN; fi
   printf '%s\n' "$d"
 }
 
@@ -798,6 +808,161 @@ cmd_config() {
   say "Worktree directory : $(get_basedir)"
 }
 
+# ---------------------------------------------------------------- switch ---
+# `switch` goes to wherever a branch lives: the main checkout (which holds only master, develop or a
+# release/* branch, and is moved onto one when asked), or a work/* / hotfix/* worktree (created if missing).
+
+# Candidate rows, "<key>  <description>"; the key is the first word and what queries match against.
+switch_rows() {
+  local mainbr path branch b seen=" "
+  mainbr=$(git -C "$MAIN" symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)
+  printf '@  [%s]\n' "$mainbr"
+  case $mainbr in   # layout rule broken by hand: offer the branch itself, selecting it repairs that
+    "$P_WORK"*|"$P_HOTFIX"*) printf '%s  (checked out in the main checkout; will be moved out)\n' "$mainbr"; seen+="$mainbr " ;;
+  esac
+  while IFS=$'\t' read -r path branch; do
+    [ "$path" != "$MAIN" ] && [ -n "$branch" ] || continue
+    printf '%s\n' "$branch"; seen+="$branch "
+  done < <(git worktree list --porcelain | awk '
+    /^worktree /{ if (p) print p "\t" b; p=substr($0,10); b="" }
+    /^branch /{ b=substr($0,8); sub("^refs/heads/","",b) }
+    END{ if (p) print p "\t" b }')
+  while read -r b; do
+    [ "$b" != "$mainbr" ] || continue
+    case "$seen" in *" $b "*) continue ;; esac
+    case $b in
+      "$MASTER"|"$DEVELOP"|"$P_RELEASE"*) printf '%s  (moves the main checkout here)\n' "$b" ;;
+      "$P_WORK"*|"$P_HOTFIX"*)            printf '%s  (no worktree yet; one is created)\n' "$b" ;;
+    esac
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+}
+
+# What queries are matched against: "<key> <alt>" per row. For the main checkout (@) alt is its branch
+# when that is one it may hold, so `switch develop` finds it while main is on develop.
+switch_keys() {
+  local mainbr
+  mainbr=$(git -C "$MAIN" symbolic-ref --quiet --short HEAD 2>/dev/null || echo detached)
+  switch_rows | while read -r key _; do
+    if [ "$key" = @ ]; then
+      case $mainbr in "$MASTER"|"$DEVELOP"|"$P_RELEASE"*) echo "@ $mainbr"; continue ;; esac
+    fi
+    echo "$key -"
+  done
+}
+
+# Preview for one row (argument: the whole row or just its key).
+cmd_switch_preview() {
+  local key=${1%% *} dir branch
+  if [ "$key" = @ ]; then
+    dir=$MAIN; branch=$(git -C "$MAIN" symbolic-ref --quiet --short HEAD 2>/dev/null || echo HEAD)
+  else
+    branch=$key; dir=$(worktree_of "$key")
+  fi
+  if [ -n "$dir" ]; then
+    printf '%s\n\n' "$dir"
+    git -c color.ui=always -C "$dir" status -sb
+    printf '\n'
+  else
+    case $key in
+      "$MASTER"|"$DEVELOP"|"$P_RELEASE"*) printf "The main checkout will be moved onto '%s'.\n\n" "$key" ;;
+      *) printf "'%s' has no worktree yet; one will be created.\n\n" "$key" ;;
+    esac
+  fi
+  git -c color.ui=always -C "$MAIN" log --oneline --decorate -n 20 "$branch" --
+}
+
+# Resolve QUERY to exactly one key without starting a picker (starting one only to have it exit again
+# shows as a flash). Case-insensitive; the first tier with exactly one hit wins: exact, substring,
+# then fuzzy (letters in order). Several hits in a tier, or none at all: print nothing.
+resolve_switch_query() { # query
+  switch_keys | awk -v q="$1" '
+    BEGIN { lq = tolower(q) }
+    { n[NR] = $1; ln[NR] = tolower($1); alt[NR] = ($2 == "-") ? "" : tolower($2) }
+    END {
+      for (tier = 1; tier <= 3; tier++) {
+        c = 0; hit = ""
+        for (i = 1; i <= NR; i++) {
+          ok = 0
+          for (s = 1; s <= 2 && !ok; s++) {
+            str = (s == 1) ? ln[i] : alt[i]
+            if (str == "") continue
+            if (tier == 1)      ok = (str == lq)
+            else if (tier == 2) ok = (index(str, lq) > 0)
+            else {
+              ok = 1; pos = 1
+              for (k = 1; k <= length(lq); k++) {
+                p = index(substr(str, pos), substr(lq, k, 1))
+                if (!p) { ok = 0; break }
+                pos += p
+              }
+            }
+          }
+          if (ok) { c++; hit = n[i] }
+        }
+        if (c == 1) { print hit; exit }
+        if (c > 1) exit
+      }
+    }' || true
+}
+
+pick_switch_row() { # query -> prints the chosen row
+  local query=$1 picker=${WTP_FLOW_PICKER:-auto} self row
+  case $picker in
+    auto)
+      if   command -v tv  >/dev/null; then picker=tv
+      elif command -v fzf >/dev/null; then picker=fzf
+      else die "no interactive picker: install tv (https://github.com/alexpasmantier/television) or fzf, or pass a name"; fi ;;
+    tv|fzf) command -v "$picker" >/dev/null || die "$picker not found (WTP_FLOW_PICKER=$picker)" ;;
+    *) die "WTP_FLOW_PICKER must be auto, tv or fzf (got '$picker')" ;;
+  esac
+  self=$(realpath "${BASH_SOURCE[0]}")
+  local args
+  if [ "$picker" = tv ]; then
+    args=(--source-command "$(printf '%q _switch-rows' "$self")" --no-sort
+          --preview-command "$(printf "%q _switch-preview '{}'" "$self")" --preview-header '{}')
+    [ -z "$query" ] || args+=(--input "$query")
+    # shellcheck disable=SC2086  # the *_ARGS variables are meant to be word-split
+    row=$(tv "${args[@]}" ${WTP_FLOW_TV_ARGS:-}) || exit 1
+  else
+    args=(--preview "$(printf '%q _switch-preview {}' "$self")" --preview-window 'right,55%' --header 'switch to')
+    [ -z "$query" ] || args+=(--query "$query")
+    # shellcheck disable=SC2086
+    row=$(switch_rows | fzf "${args[@]}" ${WTP_FLOW_FZF_ARGS:-}) || exit 1
+  fi
+  printf '%s' "$row" | head -n1
+}
+
+cmd_switch() {
+  case ${1:-} in -h|--help) usage_switch; return ;; esac
+  local query=$* key row dir
+  key=
+  [ -z "$query" ] || key=$(resolve_switch_query "$query")
+  if [ -z "$key" ]; then
+    row=$(pick_switch_row "$query")
+    key=${row%% *}
+  fi
+  [ -n "$key" ] || exit 1
+
+  if [ "$key" = @ ]; then
+    dir=$MAIN
+  elif dir=$(worktree_of "$key") && [ -n "$dir" ]; then
+    :   # already checked out somewhere (the main checkout included)
+  else
+    branch_exists "$key" || die "No branch '$key'."
+    case $key in
+      "$MASTER"|"$DEVELOP"|"$P_RELEASE"*)
+        switch_main "$key"; dir=$MAIN
+        printf "Note: the main checkout is now on '%s'.\n" "$key" >&2 ;;
+      "$P_WORK"*|"$P_HOTFIX"*) dir=$(ensure_worktree "$key") ;;
+      *) die "'$key' is not a master, develop, release, work or hotfix branch." ;;
+    esac
+  fi
+  # a work/hotfix branch found in the main checkout breaks the layout rule: repair it
+  case $key in "$P_WORK"*|"$P_HOTFIX"*) [ "$dir" != "$MAIN" ] || dir=$(ensure_worktree "$key") ;; esac
+  set_cd "$dir"
+  say "$dir"
+}
+
 cmd_shell_init() {
   cat <<'EOF'
 # eval "$(wtp-flow shell-init)"
@@ -809,6 +974,24 @@ wtp-flow() {
   rm -f "$f"
   return $rc
 }
+EOF
+}
+
+usage_switch() {
+  cat <<EOF
+usage: $PROG switch [QUERY]      (alias: $PROG checkout [QUERY])
+
+Go to where a branch lives and print that directory (with 'shell-init' your shell cd's there).
+Rows: '@' (the main checkout, labelled with its branch), every work/hotfix worktree, and the branches the
+main checkout may hold (master, develop, release/*) plus work/hotfix branches without a worktree yet.
+
+  main checkout rows   master / develop / release/*: the main checkout is moved onto the branch (it must
+                       have no uncommitted changes); work/* and hotfix/* never go there
+  work/hotfix rows     their own worktree, created if missing
+
+QUERY is matched case-insensitively (exact, then substring, then fuzzy). If exactly one row matches
+it is used at once; otherwise a picker (tv, else fzf) opens with QUERY prefilled.
+Environment: WTP_FLOW_PICKER (auto|tv|fzf), WTP_FLOW_TV_ARGS, WTP_FLOW_FZF_ARGS.
 EOF
 }
 
@@ -859,6 +1042,8 @@ Subcommands:
    release    Manage release branches
    hotfix     Manage hotfix branches
    config     Show or change configuration (e.g. 'config basedir <dir>')
+   switch     Go to a branch's place: main checkout (master/develop/release) or a worktree, with a picker
+   checkout   Alias of switch (the per-type '<type> checkout <name>' still exists)
    relocate   Move existing worktrees to the configured directory
    shell-init Print a shell function so start/track/checkout cd you
    version    Show version information
@@ -891,6 +1076,9 @@ main() {
     hotfix)       cmd_topic hotfix "$@" ;;
     config)       cmd_config "$@" ;;
     relocate)     cmd_relocate "$@" ;;
+    switch|checkout) cmd_switch "$@" ;;
+    _switch-rows)    switch_rows ;;
+    _switch-preview) cmd_switch_preview "${1:-}" ;;
     *) usage >&2; exit 1 ;;
   esac
 }

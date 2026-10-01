@@ -110,7 +110,7 @@ _wtp_flow() {
   COMPREPLY=()
 
   if [ "$COMP_CWORD" -eq 1 ]; then
-    _wtp_flow_words "init work feature release hotfix config relocate shell-init help version"
+    _wtp_flow_words "init work feature release hotfix switch checkout config relocate shell-init help version"
     return
   fi
 
@@ -125,6 +125,9 @@ _wtp_flow() {
       if   [ "$COMP_CWORD" -eq 2 ]; then _wtp_flow_words "basedir list"
       elif [ "$COMP_CWORD" -eq 3 ] && [ "$prev" = basedir ]; then _wtp_flow_dirs; fi ;;
     relocate) _wtp_flow_words "-n --dry-run -h --help" ;;
+    switch|checkout)   # row keys: @, worktree branches, and branches the main checkout may be moved onto
+      if [[ $cur == -* ]]; then _wtp_flow_words "-h --help"
+      else _wtp_flow_words "$(wtp-flow _switch-rows 2>/dev/null | awk '{ print $1 }' | tr '\n' ' ')"; fi ;;
     work|feature) _wtp_flow_topic work ;;
     release)      _wtp_flow_topic release ;;
     hotfix)       _wtp_flow_topic hotfix ;;
