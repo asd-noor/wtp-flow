@@ -19,11 +19,11 @@ without its prefix; for `release`/`hotfix` it is the version. With no name, `fin
 | Command | Effect |
 |---------|--------|
 | `<type> list [-v]` | List branches of this type; `-v` adds state (no commits yet / based on latest / may be rebased / merged). |
-| `<type> start [-F] <name> [<base>]` | New branch + worktree. Base defaults to `develop` (`work`, `release`) or `master` (`hotfix`). `-F` fetches first. |
-| `<type> checkout [<name>]` | Print the worktree path, creating the worktree if the branch has none. |
+| `<type> start [-F] <name> [<base>]` | New branch + worktree (`release`: new branch, main worktree switched onto it; it must be clean). Base defaults to `develop` (`work`, `release`) or `master` (`hotfix`). `-F` fetches first. |
+| `<type> checkout [<name>]` | Print the worktree path, creating the worktree if the branch has none. For `release`: switch the main worktree onto the branch and print its path. |
 | `<type> publish [<name>]` | Push the branch to `origin` and set upstream. |
-| `<type> track <name>` | Create a worktree for a branch that exists on `origin`. |
-| `<type> delete [-f] [-r] <name>` | Remove worktree and local branch. Refuses if unmerged unless `-f`. `-r` also deletes the remote branch. |
+| `<type> track <name>` | Create a worktree for a branch that exists on `origin` (for `release`: switch the main worktree onto it). |
+| `<type> delete [-f] [-r] <name>` | Remove worktree and local branch (`release`: main worktree goes back to `develop`). Refuses if unmerged unless `-f`. `-r` also deletes the remote branch. |
 
 ## work
 

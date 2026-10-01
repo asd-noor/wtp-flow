@@ -1,8 +1,9 @@
 # wtp-flow
 
-git-flow, where every topic branch lives in its own git worktree, managed by
+git-flow, where `work` and `hotfix` branches live in their own git worktrees, managed by
 [wtp](https://github.com/satococoa/wtp). Branching and merge behaviour follow `git flow` (AVH edition);
-the difference is that you never switch branches in your checkout, you `cd` between worktrees.
+the difference is that you `cd` between worktrees instead of switching branches. `release` branches are the
+exception: they only touch a changelog and a version, so they switch the main worktree, as in plain git-flow.
 
 | wtp-flow | git-flow                      | branches from | merges into                         |
 |----------|-------------------------------|---------------|-------------------------------------|
@@ -37,8 +38,8 @@ wtp-flow work start login          # work/login off develop, in ../worktrees/wor
 # ...commit...
 wtp-flow work finish               # merge into develop, remove worktree + branch (name inferred from cwd)
 
-wtp-flow release start 1.2.0       # release/1.2.0 off develop
-wtp-flow release finish -m "1.2.0" # merge to master, tag 1.2.0, merge the tag into develop, clean up
+wtp-flow release start 1.2.0       # release/1.2.0 off develop; the main worktree switches to it
+wtp-flow release finish -m "1.2.0" # merge to master, tag 1.2.0, merge the tag into develop, main back on develop
 
 wtp-flow hotfix start 1.2.1        # hotfix/1.2.1 off master
 wtp-flow hotfix finish -p          # same as release finish, then push develop, master and the tag
@@ -105,7 +106,11 @@ Default `../worktrees`, so branch `work/login` lives in `../worktrees/work/login
 
 ## Differences from git-flow, all due to worktrees
 
-- `start`/`track`/`checkout` create a worktree instead of switching your checkout.
+- `work` and `hotfix` `start`/`track`/`checkout` create a worktree instead of switching your checkout.
+- `release start`/`track`/`checkout` switch the main worktree (which must have no uncommitted changes) onto the
+  release branch, no worktree. `finish` moves it back to `develop`, so `develop` must not be checked out in
+  another worktree at that point. While a release is open, `work finish` and `hotfix finish` still merge
+  into `develop` through a throwaway worktree.
 - `finish` never touches your current checkout. It merges in the worktree that already has the target
   branch checked out (which must have no uncommitted changes), or in a throwaway one.
 - A conflicting merge is aborted and nothing changes, instead of being left half-done. Resolve it on the

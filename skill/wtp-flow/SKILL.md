@@ -1,6 +1,6 @@
 ---
 name: wtp-flow
-description: Drives the wtp-flow CLI, a git-flow variant where every topic branch (work/*, release/*, hotfix/*) gets its own git worktree. Use when a repo uses wtp-flow (config keys `wtpflow.*`, a `.wtp.yml`), or when asked to start, finish, publish or clean up feature/bugfix/release/hotfix work with git-flow semantics in isolated worktrees, tag a release, ship a hotfix, or move worktrees to another directory.
+description: Drives the wtp-flow CLI, a git-flow variant where work/* and hotfix/* branches get their own git worktree (release/* switches the main checkout). Use when a repo uses wtp-flow (config keys `wtpflow.*`, a `.wtp.yml`), or when asked to start, finish, publish or clean up feature/bugfix/release/hotfix work with git-flow semantics in isolated worktrees, tag a release, ship a hotfix, or move worktrees to another directory.
 license: GPL-3.0-or-later
 compatibility: Requires bash, git, wtp (github.com/satococoa/wtp) and the wtp-flow script on PATH; GNU realpath for `relocate`. Needs a shell that can run commands.
 metadata:
@@ -9,7 +9,7 @@ metadata:
 
 # wtp-flow
 
-git-flow where each topic branch lives in its own worktree. Branch model:
+git-flow where work and hotfix branches live in their own worktrees (release switches the main checkout). Branch model:
 
 | Type | Branch | Starts from | Finishes into |
 |------|--------|-------------|---------------|
@@ -19,12 +19,15 @@ git-flow where each topic branch lives in its own worktree. Branch model:
 
 ## Rules for agents
 
-1. **Never switch branches in the main checkout** (`git checkout`/`switch` to a topic branch). Start topic
-   work with `wtp-flow <type> start`, which creates a worktree, and do the work there.
+1. **Never switch branches in the main checkout yourself** (`git checkout`/`switch` to a topic branch). Start
+   topic work with `wtp-flow <type> start`. `work` and `hotfix` get their own worktree; do the work there.
+   `release` is the exception: `release start` switches the main checkout onto `release/<version>` and you
+   work right there (it must be clean first).
 2. **Your shell does not keep a `cd`** between tool calls and `shell-init` is not loaded. Get the worktree
    path from output and use absolute paths or `git -C <path>` / `cd <path> && ...` in each command:
    ```sh
-   dir=$(wtp-flow work checkout login)   # prints only the path (creates the worktree if missing)
+   dir=$(wtp-flow work checkout login)   # prints only the path (creates the worktree if missing;
+                                         # for release it switches the main checkout and prints its path)
    git -C "$dir" status
    ```
 3. **Stay non-interactive.** Use `wtp-flow init -d`. Always pass `-m "<message>"` to `release finish` and
@@ -33,7 +36,7 @@ git-flow where each topic branch lives in its own worktree. Branch model:
    deletes the `origin` copy of the topic branch if one exists; use `--keepremote` when that is not wanted.
 5. **Finish with `wtp-flow`, not by hand.** Do not `git merge`/`git branch -d`/`git worktree remove` a topic
    branch yourself; `finish` merges, tags, back-merges and cleans up in the right order.
-6. Commit your work in the topic worktree before `finish`: it refuses if tracked files are modified.
+6. Commit your work in the topic worktree (the main checkout, for a release) before `finish`: it refuses if tracked files are modified.
 
 ## Workflow
 
@@ -52,7 +55,7 @@ Options: `--no-ff` (always a merge commit), `-S` (squash), `-r` (rebase onto dev
 **Release**
 ```sh
 wtp-flow release start 1.4.0      # only one release may be open
-# stabilise in the worktree: version bump, changelog, fixes
+# the main checkout is now on release/1.4.0: version bump, changelog, fixes; commit there
 wtp-flow release finish -m "Release 1.4.0" 1.4.0
 ```
 **Hotfix**
@@ -62,7 +65,8 @@ wtp-flow hotfix start 1.4.1
 wtp-flow hotfix finish -m "Hotfix 1.4.1" 1.4.1
 ```
 `finish` merges into `master` with `--no-ff`, creates an annotated tag (name = version, plus the configured
-tag prefix), merges the tag into `develop`, then removes the worktree and branch.
+tag prefix), merges the tag into `develop`, then removes the worktree and branch (for a release: switches the
+main checkout back to `develop` and deletes the branch).
 
 **Inspect**: `wtp-flow work list -v` (also `release`, `hotfix`), `wtp-flow work diff <name>`, `wtp list`.
 

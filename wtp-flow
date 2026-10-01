@@ -11,8 +11,10 @@
 #   hotfix/*    hotfix/*
 #
 # Differences from git-flow, all consequences of worktrees:
-#   * `start`/`track`/`checkout` create a worktree instead of switching your
-#     checkout. With `eval "$(wtp-flow shell-init)"` your shell cd's into it.
+#   * work and hotfix `start`/`track`/`checkout` create a worktree instead of
+#     switching your checkout. With `eval "$(wtp-flow shell-init)"` your shell
+#     cd's into it. Release branches are the exception: they only touch a
+#     changelog/version, so they switch the main worktree, as in plain git-flow.
 #   * `finish` never touches your current checkout: it merges inside whichever
 #     worktree already has the target branch checked out, or inside a
 #     throwaway one. The topic worktree is removed along with the branch.
@@ -114,6 +116,23 @@ add_worktree() {
 ensure_worktree() {
   local d; d=$(worktree_of "$1")
   [ -n "$d" ] || d=$(add_worktree "$1")
+  printf '%s\n' "$d"
+}
+
+# Release branches only ever touch a changelog and a version string, so they do not get
+# a worktree of their own: the main worktree is switched onto them, as in plain git-flow.
+# switch_main CHECKOUT-ARGS... — `git checkout` in the main worktree, which must be clean.
+switch_main() {
+  require_clean "$MAIN"
+  git -C "$MAIN" checkout -q "$@" || die "Could not switch the main worktree (git checkout $*)."
+}
+
+# Where a topic branch lives: its worktree, or for release the main worktree (switching it).
+topic_dir() { # kind branch
+  local d; d=$(worktree_of "$2")
+  if [ -z "$d" ]; then
+    if [ "$1" = release ]; then switch_main "$2"; d=$MAIN; else d=$(add_worktree "$2"); fi
+  fi
   printf '%s\n' "$d"
 }
 
@@ -401,15 +420,22 @@ start_topic() {
   remote_branch "$branch" && die "Branch '$branch' already exists on origin. Use '$PROG $kind track $name'."
   [ "$base" != "$(base_of "$kind")" ] || check_sync "$base"
 
-  local path
-  path=$(wtp add -b "$branch" "$base" --quiet | tail -n1)
-  [ -d "$path" ] || die "wtp did not create a worktree for '$branch'"
+  local path where
+  if [ "$kind" = release ]; then
+    switch_main --no-track -b "$branch" "$base"
+    path=$MAIN
+    where="- The main worktree ($path) is now on branch '$branch'"
+  else
+    path=$(wtp add -b "$branch" "$base" --quiet | tail -n1)
+    [ -d "$path" ] || die "wtp did not create a worktree for '$branch'"
+    where="- A worktree for it was created at '$path'"
+  fi
   set_cd "$path"
   cat <<EOF
 
 Summary of actions:
 - A new branch '$branch' was created, based on '$base'
-- A worktree for it was created at '$path'
+$where
 
 Now, start committing on your $kind. When done, use:
 
@@ -425,6 +451,7 @@ cleanup_branch() {
   local b=$1 d; d=$(worktree_of "$b")
   if [ "$d" = "$MAIN" ]; then
     git checkout -q "$DEVELOP" || die "Cannot leave '$b' in the main worktree; '$DEVELOP' is busy."
+    say "- The main worktree is back on '$DEVELOP'"
     d=
   fi
   if [ -n "$d" ]; then
@@ -494,6 +521,10 @@ finish_release_like() { # kind
   local kind=$1 b d ver tag label
   b=$(resolve_branch "$kind" "$(arg 0)")
   d=$(worktree_of "$b"); [ -z "$d" ] || require_clean "$d"
+  if [ "$d" = "$MAIN" ]; then
+    local dv; dv=$(worktree_of "$DEVELOP")
+    [ -z "$dv" ] || [ "$dv" = "$MAIN" ] || die "'$DEVELOP' is checked out in '$dv'; the main worktree cannot return to it after finishing. Switch that worktree to another branch first."
+  fi
   ver=${b#"$(prefix_of "$kind")"}
   tag=${TAGNAME:-$VTAG$ver}
   label=$([ "$kind" = release ] && echo Release || echo Hotfix)
@@ -588,13 +619,19 @@ cmd_track() {
   do_fetch
   branch_exists "$b" && die "Local branch '$b' already exists."
   remote_branch "$b" || die "Could not fetch branch '$b' from remote 'origin'."
-  local path; path=$(add_worktree "$b")
+  local path where
+  if [ "$kind" = release ]; then
+    switch_main --track "origin/$b"
+    path=$MAIN; where="- The main worktree ($path) is now on branch '$b'"
+  else
+    path=$(add_worktree "$b"); where="- A worktree for it was created at '$path'"
+  fi
   set_cd "$path"
   cat <<EOF
 
 Summary of actions:
 - A new remote tracking branch '$b' was created
-- A worktree for it was created at '$path'
+$where
 EOF
 }
 
@@ -636,7 +673,7 @@ cmd_checkout() {
   local kind=$1; shift
   parse_opts "$kind" checkout "$@"
   local b d; b=$(resolve_branch "$kind" "$(arg 0)")
-  d=$(ensure_worktree "$b")
+  d=$(topic_dir "$kind" "$b")
   set_cd "$d"
   say "$d"
 }
