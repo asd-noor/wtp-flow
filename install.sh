@@ -9,7 +9,7 @@ usage() {
   cat <<'EOF'
 usage: ./install.sh [options]
 
-Installs wtp-flow and its bash completion into your home directory (no root needed).
+Installs wtp-flow, wtp-dir and the bash completion into your home directory (no root needed).
 
   --prefix DIR           install under DIR: DIR/bin and DIR/share/bash-completion/completions
                          (default: bin in ~/.local/bin, completion in $XDG_DATA_HOME/bash-completion/completions)
@@ -62,6 +62,7 @@ fi
 bin_dir=$(expand "$bin_dir") comp_dir=$(expand "$comp_dir") skills_dir=$(expand "$skills_dir")
 
 SRC_BIN=$HERE/wtp-flow
+SRC_DIR=$HERE/wtp-dir
 SRC_COMP=$HERE/completions/wtp-flow.bash
 SKILLS=(wtp wtp-flow)
 
@@ -114,6 +115,7 @@ remove_skill() {
 if [ $uninstall -eq 1 ]; then
   info "Uninstalling wtp-flow:"
   remove "$bin_dir/wtp-flow" 'wtp-flow'
+  remove "$bin_dir/wtp-dir" 'wtp-dir'
   remove "$comp_dir/wtp-flow" 'wtp-flow'
   if [ $do_skills -eq 1 ]; then for s in "${SKILLS[@]}"; do remove_skill "$skills_dir/$s"; done; fi
   info "Done. Remove the 'wtp-flow shell-init' / completion lines from your shell rc yourself if you added them."
@@ -122,9 +124,11 @@ fi
 
 command -v git >/dev/null || die "git is required"
 [ -f "$SRC_COMP" ] || [ $do_comp -eq 0 ] || die "missing $SRC_COMP"
+[ -f "$SRC_DIR" ] || die "missing $SRC_DIR"
 
 info "Installing wtp-flow:"
 put "$SRC_BIN" "$bin_dir/wtp-flow" 755 'wtp-flow'
+put "$SRC_DIR" "$bin_dir/wtp-dir" 755 'wtp-dir'
 [ $do_comp -eq 0 ] || put "$SRC_COMP" "$comp_dir/wtp-flow" 644 'wtp-flow'
 if [ $do_skills -eq 1 ]; then
   for s in "${SKILLS[@]}"; do put_dir "$HERE/skill/$s" "$skills_dir/$s"; done
@@ -139,6 +143,7 @@ case ":$PATH:" in
 esac
 info "Optional, in your ~/.bashrc:"
 info "    eval \"\$(wtp-flow shell-init)\"    # start/track/checkout cd you into the worktree"
+info "    eval \"\$(wtp-dir shell-init)\"      # wtp-dir: fuzzy-pick a worktree with tv and cd there (needs television)"
 if [ $do_comp -eq 1 ]; then
   info "    source \"$comp_dir/wtp-flow\"       # only if completion is not auto-loaded (needs the bash-completion package)"
 fi

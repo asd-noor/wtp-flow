@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# wtp-dir — pick a wtp worktree with television (https://github.com/alexpasmantier/television)
+# and print its absolute path. Think `cd "$(wtp-dir)"`, with tv instead of fzf as the picker.
+#
+# A script cannot change its parent shell's directory, so for a real `cd` load the function:
+#     eval "$(wtp-dir shell-init)"
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: wtp-dir [QUERY]
+       wtp-dir shell-init
+
+Fuzzy-pick one of this repository's worktrees (from `wtp list`) with television; the preview shows
+the path, `git status` and recent commits. The absolute path of the choice is printed on stdout.
+
+  QUERY       prefill the search; if exactly one worktree matches, it is selected without showing the UI
+  shell-init  print a shell function `wtp-dir` that cd's into the choice (use: eval "$(wtp-dir shell-init)")
+
+Environment:
+  WTP_DIR_TV_ARGS   extra arguments for tv, e.g. "--inline" or "--height 20 --no-preview"
+
+Exits 1 if nothing was selected.
+EOF
+}
+
+die() { printf 'wtp-dir: %s\n' "$*" >&2; exit 1; }
+
+case ${1:-} in
+  -h|--help) usage; exit 0 ;;
+  shell-init)
+    cat <<'EOF'
+# eval "$(wtp-dir shell-init)"
+wtp-dir() {
+  local d
+  d=$(command wtp-dir "$@") || return $?
+  if [ -d "$d" ]; then builtin cd "$d"; elif [ -n "$d" ]; then printf '%s\n' "$d"; fi
+}
+EOF
+    exit 0 ;;
+esac
+
+command -v tv  >/dev/null || die "tv (television) not found: https://github.com/alexpasmantier/television"
+command -v wtp >/dev/null || die "wtp not found: https://github.com/satococoa/wtp"
+git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
+
+# `command wtp`: tv runs these through a shell; be immune to a `wtp` shell function from `wtp hook`.
+preview='d=$(command wtp cd '"'{}'"') || exit 1
+printf "%s\n\n" "$d"
+git -c color.ui=always -C "$d" status -sb
+printf "\n"
+git -c color.ui=always -C "$d" log --oneline --decorate -n 20'
+
+query=$*
+args=(--source-command 'command wtp list -q' --no-sort --preview-command "$preview" --preview-header '{}')
+[ -z "$query" ] || args+=(--input "$query" --select-1)
+
+# shellcheck disable=SC2086  # WTP_DIR_TV_ARGS is meant to be word-split
+name=$(tv "${args[@]}" ${WTP_DIR_TV_ARGS:-}) || exit 1
+name=$(printf '%s' "$name" | head -n1)
+[ -n "$name" ] || exit 1
+
+wtp cd "$name"
