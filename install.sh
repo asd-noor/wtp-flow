@@ -143,7 +143,7 @@ case ":$PATH:" in
 esac
 info "Optional, in your ~/.bashrc:"
 info "    eval \"\$(wtp-flow shell-init)\"    # start/track/checkout cd you into the worktree"
-info "    eval \"\$(wtp-dir shell-init)\"      # wtp-dir: fuzzy-pick a worktree with tv and cd there (needs television)"
+info "    eval \"\$(wtp-dir shell-init)\"      # wtp-dir: fuzzy-pick a worktree and cd there (needs tv or fzf)"
 if [ $do_comp -eq 1 ]; then
   info "    source \"$comp_dir/wtp-flow\"       # only if completion is not auto-loaded (needs the bash-completion package)"
 fi

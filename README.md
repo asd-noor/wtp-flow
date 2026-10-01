@@ -52,11 +52,12 @@ source /path/to/wtp-flow/completions/wtp-flow.bash
 or copy it to `~/.local/share/bash-completion/completions/wtp-flow` (loaded on demand when the
 bash-completion package is installed). It does not depend on that package.
 
-## wtp-dir: pick a worktree with television
+## wtp-dir: pick a worktree interactively
 
-`wtp-dir` is a small standalone script (works with plain wtp, not only wtp-flow repos) that fuzzy-picks one of the
-repo's worktrees with [television](https://github.com/alexpasmantier/television) (`tv`), as an fzf alternative,
-and prints its absolute path. The preview shows the path, `git status` and the last commits.
+`wtp cd` is not interactive: you must type the worktree name. `wtp-dir` is a small standalone script (works with
+plain wtp, not only wtp-flow repos) that fuzzy-picks one of the repo's worktrees and prints its absolute path.
+The picker is [television](https://github.com/alexpasmantier/television) (`tv`), or [fzf](https://github.com/junegunn/fzf)
+when `tv` is not installed. The preview shows the path, `git status` and the last commits.
 
 ```sh
 cd "$(wtp-dir)"            # pick interactively
@@ -64,9 +65,10 @@ cd "$(wtp-dir auth)"       # prefilled query; jumps straight there if exactly on
 eval "$(wtp-dir shell-init)"   # in your shell rc: defines a wtp-dir function that does the cd for you
 ```
 
-Exits 1 if you cancel. `WTP_DIR_TV_ARGS` passes extra arguments to tv (e.g. `WTP_DIR_TV_ARGS="--inline"`).
-It needs `tv` and `wtp` on `PATH`, and uses `command wtp` internally so a `wtp` shell function (from `wtp hook`)
-doesn't get in the way. `install.sh` installs it next to `wtp-flow`.
+Exits 1 if you cancel. Environment: `WTP_DIR_PICKER` (`auto`, `tv` or `fzf`; auto prefers tv),
+`WTP_DIR_TV_ARGS` / `WTP_DIR_FZF_ARGS` (extra arguments, e.g. `WTP_DIR_TV_ARGS="--inline"`,
+`WTP_DIR_FZF_ARGS="--height 40% --reverse"`). It uses `command wtp` internally so a `wtp` shell function (from
+`wtp hook`) doesn't get in the way. `install.sh` installs it next to `wtp-flow`.
 
 ## Use it from an AI agent
 
