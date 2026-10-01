@@ -248,6 +248,15 @@ get_basedir() {
 
 set_basedir() { # dir
   local dir=$1 f="$MAIN/.wtp.yml"
+  # wtp does not expand these: it would treat them as relative to the repo root
+  # (e.g. "~/wt" becomes <repo>/~/wt). Typed at the init prompt or quoted, they arrive literally.
+  case $dir in
+    "~") dir=$HOME ;;
+    "~/"*) dir=$HOME/${dir#"~/"} ;;
+    '$HOME') dir=$HOME ;;
+    '$HOME/'*) dir=$HOME/${dir#'$HOME/'} ;;
+    '${HOME}/'*) dir=$HOME/${dir#'${HOME}/'} ;;
+  esac
   case $dir in *\"*|*\\*) die "worktree directory may not contain quotes or backslashes" ;; esac
   [ -n "$dir" ] || die "worktree directory may not be empty"
   if [ ! -f "$f" ]; then
@@ -268,6 +277,21 @@ YML
   else
     printf 'defaults:\n  base_dir: "%s"\n' "$dir" >>"$f"
   fi
+}
+
+# .wtp.yml is per-machine (worktree directory, setup hooks): keep it out of git via the
+# repo-local exclude file. Unlike .gitignore this never dirties the working tree.
+exclude_wtp_yml() {
+  [ -f "$MAIN/.wtp.yml" ] || return 0
+  if git -C "$MAIN" ls-files --error-unmatch .wtp.yml >/dev/null 2>&1; then
+    say "Note: .wtp.yml is tracked by git, so it cannot be excluded (git rm --cached .wtp.yml to untrack it)."
+    return 0
+  fi
+  git -C "$MAIN" check-ignore -q .wtp.yml && return 0
+  local ex; ex=$(git -C "$MAIN" rev-parse --path-format=absolute --git-path info/exclude)
+  mkdir -p "$(dirname "$ex")"
+  { [ ! -s "$ex" ] || [ -z "$(tail -c1 "$ex")" ] || echo; echo ".wtp.yml"; } >>"$ex"
+  say "Added .wtp.yml to .git/info/exclude."
 }
 
 cmd_init() {
@@ -337,7 +361,7 @@ cmd_init() {
 
   if [ $set_d -eq 1 ]; then
     set_basedir "$wd"
-    say "Worktrees will be created in '$wd'."
+    say "Worktrees will be created in '$(get_basedir)'."
   elif [ ! -f "$MAIN/.wtp.yml" ]; then
     set_basedir "$DEFAULT_BASEDIR"
     say "Wrote .wtp.yml (worktrees live in $DEFAULT_BASEDIR)"
@@ -349,6 +373,7 @@ cmd_init() {
      && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
     git checkout -q "$d"
   fi
+  exclude_wtp_yml
   say "Initialized: production '$m', development '$d'."
 }
 
@@ -706,7 +731,7 @@ cmd_config() {
     basedir|worktrees)
       if [ -z "${2:-}" ]; then get_basedir; echo; return; fi
       set_basedir "$2"
-      say "Worktrees will be created in '$2' from now on."
+      say "Worktrees will be created in '$(get_basedir)' from now on."
       say "Existing worktrees are not moved. Run '$PROG relocate' to move them."
       return ;;
     ""|list) ;;

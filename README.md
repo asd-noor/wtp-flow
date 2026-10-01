@@ -1,49 +1,122 @@
 # wtp-flow
 
-git-flow (AVH semantics), where every topic branch lives in its own git worktree
-managed by [wtp](https://github.com/satococoa/wtp).
+git-flow, where every topic branch lives in its own git worktree, managed by
+[wtp](https://github.com/satococoa/wtp). Branching and merge behaviour follow `git flow` (AVH edition);
+the difference is that you never switch branches in your checkout, you `cd` between worktrees.
 
-| wtp-flow  | git-flow  |
-|-----------|-----------|
-| master    | master    |
-| develop   | develop   |
-| work      | feature, bugfix, support (merged into one: all branch from and merge back to develop) |
-| release   | release   |
-| hotfix    | hotfix    |
+| wtp-flow | git-flow                      | branches from | merges into                         |
+|----------|-------------------------------|---------------|-------------------------------------|
+| master   | master                        | -             | -                                   |
+| develop  | develop                       | -             | -                                   |
+| work     | feature, bugfix, support (one type) | develop | develop                             |
+| release  | release                       | develop       | master (tagged), tag back into develop |
+| hotfix   | hotfix                        | master        | master (tagged), tag back into develop |
 
-Requires `git` and `wtp` on `PATH`. Put `wtp-flow` anywhere on `PATH`, then
-optionally `eval "$(wtp-flow shell-init)"` so `start`/`track`/`checkout` cd you
-into the worktree (and `finish` cd's you out of a removed one).
+## Install
+
+Requires `git`, [`wtp`](https://github.com/satococoa/wtp) and a GNU userland (`realpath -m`; on macOS
+install coreutils). Put the `wtp-flow` script anywhere on your `PATH`, then optionally add this to your
+shell rc so `start`/`track`/`checkout` cd you into the worktree, and `finish` cd's you out of a removed one:
+
+```sh
+eval "$(wtp-flow shell-init)"
+```
+
+## Use it from an AI agent
+
+`skill/wtp-flow/` is an [Agent Skill](https://agentskills.io) (`SKILL.md` plus `references/`). Copy or symlink the
+`wtp-flow` directory into your agent's skills folder (for Claude Code: `~/.claude/skills/` or `.claude/skills/`).
+It teaches the agent the branch model, to work inside worktrees rather than switching branches, to stay
+non-interactive, and to leave pushing to you.
+
+## Quick start
+
+```sh
+wtp-flow init                      # master + develop, .wtp.yml; prompts like git flow init (-d for defaults)
+wtp-flow work start login          # work/login off develop, in ../worktrees/work/login
+# ...commit...
+wtp-flow work finish               # merge into develop, remove worktree + branch (name inferred from cwd)
+
+wtp-flow release start 1.2.0       # release/1.2.0 off develop
+wtp-flow release finish -m "1.2.0" # merge to master, tag 1.2.0, merge the tag into develop, clean up
+
+wtp-flow hotfix start 1.2.1        # hotfix/1.2.1 off master
+wtp-flow hotfix finish -p          # same as release finish, then push develop, master and the tag
+```
+
+## Commands
 
 ```
-wtp-flow init [-d] [-f] [-w <worktree-dir>]
+wtp-flow init [-d] [-f] [-p <work>] [-r <release>] [-x <hotfix>] [-t <tag>] [-w <worktree-dir>]
 wtp-flow config [basedir [<dir>]]
 wtp-flow relocate [-n]
-wtp-flow work    {list [-v] | start [-F] <name> [<base>] | finish [-F -r -p -k -D -S --no-ff] [<name>]
-                  | publish | track <name> | checkout | delete [-f -r] | diff | rebase [-i -p] | pull}
-wtp-flow release {list | start [-F] <version> [<base>] | finish [-F -s -u -m -f -p -k -n -b -S -T --ff-master] [<version>]
-                  | publish | track | checkout | delete}
-wtp-flow hotfix  {list | start [-F] <version> [<base>] | finish [same as release] | publish | track | checkout | delete}
+wtp-flow shell-init
+
+wtp-flow work    list [-v]
+wtp-flow work    start [-F] <name> [<base>]
+wtp-flow work    finish [-F] [-r] [-p] [-k|--keeplocal|--keepremote] [-D] [-S] [--no-ff] [--push] [<name>]
+wtp-flow work    publish | track <name> | checkout [<name>] | delete [-f] [-r] <name>
+wtp-flow work    diff [<name>] | rebase [-i] [-p] [<name>] | pull <remote> [<name>]
+
+wtp-flow release list [-v]
+wtp-flow release start [-F] <version> [<base>]
+wtp-flow release finish [-F] [-s] [-u <key>] [-m <msg> | -f <file>] [-p] [-k|--keeplocal|--keepremote]
+                        [-D] [-n] [-b] [-S] [-T <tagname>] [--ff-master] [<version>]
+wtp-flow release publish | track <name> | checkout [<name>] | delete [-f] [-r] <name>
+
+wtp-flow hotfix  ...same as release, minus --ff-master; branches from master
 ```
 
-Behaviour is the same as `git flow`: `work finish` fast-forwards when it can;
-`release`/`hotfix finish` merge `--no-ff` into master, tag (no prefix by default),
-and back-merge the **tag** into develop; only one release/hotfix at a time;
-config lives in `wtpflow.*` (branch.master, branch.develop, prefix.*, prefix.versiontag).
+Notes on flags (all as in git-flow):
 
-## Differences, all due to worktrees
+- `finish` with no name uses the branch you are on. `work` names also accept a unique prefix.
+- `work finish`: fast-forwards when it can; `--no-ff` always makes a merge commit; `-S` squashes;
+  `-r` rebases onto develop first (`-p` keeps merges). Use `--push` to push develop afterwards
+  (for `work finish`, `-p` means preserve-merges, as in git-flow).
+- `release`/`hotfix finish`: merges `--no-ff` into master, creates an annotated tag (`-s`/`-u` sign it,
+  `-m`/`-f` set the message, `-n` skips it, `-T` renames it), then merges the **tag** into develop
+  (`-b` skips that). `-p` pushes develop, master and the tag.
+- Finishing deletes the local branch, its worktree, and the `origin` branch if one exists. `-k` keeps the
+  branches (the worktree is still removed; `checkout` recreates it). `-D` forces removal of a worktree that
+  has untracked files.
+- `start` refuses if a release or hotfix is already open, or if the tag already exists.
+- `-F` fetches `origin` first. Finishing and starting refuse when master/develop have diverged from or are
+  behind `origin`.
+- `feature` is accepted as an alias of `work`.
 
-- `start`/`track`/`checkout` create a worktree (`<base_dir>/<branch>`, default `../worktrees/<branch>`) instead of switching your checkout.
+## Configuration
+
+Stored by `wtp-flow init` in the repo's git config (`wtpflow.*`): `branch.master`, `branch.develop`,
+`prefix.work`, `prefix.release`, `prefix.hotfix`, `prefix.versiontag` (defaults: `master`, `develop`,
+`work/`, `release/`, `hotfix/`, and no tag prefix). `wtp-flow config` shows them.
+
+### Where worktrees live
+
+The location is wtp's `defaults.base_dir` in `.wtp.yml`, the single source of truth (per-machine: worktree directory, setup hooks). It is not meant to be shared, so `wtp-flow init` adds it to `.git/info/exclude` (repo-local, shared by all worktrees, never dirties the tree, and `.gitignore` is untouched). It skips this if the file is already ignored; a `.wtp.yml` that is already tracked is left alone with a note.
+Default `../worktrees`, so branch `work/login` lives in `../worktrees/work/login`.
+
+- Set it with `wtp-flow init -w <dir>` (or answer the prompt), or later with `wtp-flow config basedir <dir>`.
+  Editing `.wtp.yml` by hand works too. Relative paths resolve against the main worktree; absolute paths work. A leading `~` or `$HOME` is expanded to your home directory before it is written, because wtp itself would read it as relative to the repo root.
+- Changing it does not move existing worktrees. `wtp-flow relocate` does (`-n` for a dry run). It skips
+  locked worktrees, missing directories and occupied targets, and refuses if you are standing inside a
+  worktree it would move.
+- Old and new locations can coexist: wtp-flow always asks git where a worktree actually is.
+- wtp hooks (`post_create`: copy `.env`, `npm install`, ...) in `.wtp.yml` run for every new worktree.
+
+## Differences from git-flow, all due to worktrees
+
+- `start`/`track`/`checkout` create a worktree instead of switching your checkout.
 - `finish` never touches your current checkout. It merges in the worktree that already has the target
-  branch, or a throwaway one, then removes the topic worktree and branch.
-- A conflicting merge is aborted rather than left half-done; resolve on the topic branch and re-run `finish`.
-- `-k` keeps the branch but still removes its worktree (`checkout` recreates it).
-- git-flow's `feature`, `bugfix` and `support` are one `work` type here. `feature` is still accepted as an alias of `work`.
+  branch checked out (which must have no uncommitted changes), or in a throwaway one.
+- A conflicting merge is aborted and nothing changes, instead of being left half-done. Resolve it on the
+  topic branch (`git merge develop`) and re-run `finish`.
+- `bugfix` and `support` are folded into `work`, so support branches come off develop, not master.
+- When a release is open, `hotfix finish` still back-merges into develop only (AVH behaviour).
+- Config keys are `wtpflow.*`, not `gitflow.*`: a repo set up with real git-flow needs `wtp-flow init` once.
 
-## Where worktrees live
+## Known limits
 
-The location is wtp's `defaults.base_dir` in `.wtp.yml`, which is the single source of truth (commit it to
-share it). Set it with `wtp-flow init -w <dir>` (or answer the prompt), and show or change it later with
-`wtp-flow config basedir [<dir>]`. Relative paths resolve against the main worktree; absolute paths work too.
-Changing it does not move existing worktrees; `wtp-flow relocate` does (`-n` for a dry run). It skips locked
-worktrees and occupied targets, and refuses if you are standing inside a worktree it would move.
+- Short flags cannot be combined (`-F -k`, not `-Fk`).
+- If the back-merge into develop conflicts after master was merged and tagged, you are told to merge the
+  tag by hand; re-running `finish` then fails on "tag already exists" (same as git-flow).
+- Signed tags (`-s`, `-u`) are untested. The only remote supported is `origin`.
