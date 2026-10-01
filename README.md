@@ -16,12 +16,27 @@ exception: they only touch a changelog and a version, so they switch the main wo
 ## Install
 
 Requires `git`, [`wtp`](https://github.com/satococoa/wtp) and a GNU userland (`realpath -m`; on macOS
-install coreutils). Put the `wtp-flow` script anywhere on your `PATH`, then optionally add this to your
-shell rc so `start`/`track`/`checkout` cd you into the worktree, and `finish` cd's you out of a removed one:
+install coreutils).
+
+```sh
+git clone <this repo> && cd wtp-flow
+./install.sh                 # script -> ~/.local/bin, completion -> ~/.local/share/bash-completion/completions
+```
+
+Options: `--prefix DIR` (installs `DIR/bin` and `DIR/share/bash-completion/completions`; use `--prefix /usr/local`
+with sudo for a system-wide install), `--bin-dir`, `--completion-dir`, `--no-completion`, `--link` (symlink to the
+checkout so `git pull` updates it), `--skills[=DIR]` (also install the agent skills, default `~/.pi/agent/skills`),
+`--force`, and `--uninstall` (removes only what it installed; pass the same location options). It never overwrites
+a file that doesn't look like wtp-flow's unless you pass `--force`. Not on `PATH`? It tells you what to add.
+
+Then optionally add this to your shell rc so `start`/`track`/`checkout` cd you into the worktree, and `finish`
+cd's you out of a removed one:
 
 ```sh
 eval "$(wtp-flow shell-init)"
 ```
+
+Or skip the installer: put the `wtp-flow` script anywhere on your `PATH`.
 
 ## Shell completion
 
@@ -40,7 +55,7 @@ bash-completion package is installed). It does not depend on that package.
 ## Use it from an AI agent
 
 `skill/wtp-flow/` is an [Agent Skill](https://agentskills.io) (`SKILL.md` plus `references/`). Copy or symlink the
-`wtp-flow` directory into your agent's skills folder (for Claude Code: `~/.claude/skills/` or `.claude/skills/`).
+`wtp-flow` directory into your agent's skills folder (default for the installer: `~/.pi/agent/skills`; for Claude Code: `~/.claude/skills/` or `.claude/skills/`, via `--skills=DIR`).
 It teaches the agent the branch model, to work inside worktrees rather than switching branches, to stay
 non-interactive, and to leave pushing to you.
 
