@@ -23,6 +23,20 @@ shell rc so `start`/`track`/`checkout` cd you into the worktree, and `finish` cd
 eval "$(wtp-flow shell-init)"
 ```
 
+## Shell completion
+
+Bash completion lives in `completions/wtp-flow.bash`. It completes subcommands, flags (per command and per
+branch type), and real names from the repo: local `work`/`release`/`hotfix` branches using your configured
+prefixes, remote-only ones for `track`, remotes for `pull`, directories for `-w`/`config basedir`, files for
+`-f`. Load it from your shell rc:
+
+```sh
+source /path/to/wtp-flow/completions/wtp-flow.bash
+```
+
+or copy it to `~/.local/share/bash-completion/completions/wtp-flow` (loaded on demand when the
+bash-completion package is installed). It does not depend on that package.
+
 ## Use it from an AI agent
 
 `skill/wtp-flow/` is an [Agent Skill](https://agentskills.io) (`SKILL.md` plus `references/`). Copy or symlink the
