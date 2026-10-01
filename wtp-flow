@@ -1,0 +1,818 @@
+#!/usr/bin/env bash
+# wtp-flow — git-flow (AVH semantics), but every topic branch lives in its own
+# git worktree managed by wtp (https://github.com/satococoa/wtp).
+#
+#   wtp-flow    git-flow
+#   master      master
+#   develop     develop
+#   work/*      feature/*
+#   release/*   release/*
+#   hotfix/*    hotfix/*
+#
+# Differences from git-flow, all consequences of worktrees:
+#   * `start`/`track`/`checkout` create a worktree instead of switching your
+#     checkout. With `eval "$(wtp-flow shell-init)"` your shell cd's into it.
+#   * `finish` never touches your current checkout: it merges inside whichever
+#     worktree already has the target branch checked out, or inside a
+#     throwaway one. The topic worktree is removed along with the branch.
+#   * A conflicting merge is aborted (nothing changes) instead of being left
+#     half-done; resolve it on the topic branch and re-run `finish`.
+
+set -euo pipefail
+
+VERSION="0.2.0"
+PROG="wtp-flow"
+
+die()  { printf 'Fatal: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'Warning: %s\n' "$*" >&2; }
+say()  { printf '%s\n' "$*"; }
+
+# ---------------------------------------------------------------- setup -----
+
+cfg() { git config --get "wtpflow.$1" 2>/dev/null || printf '%s' "${2:-}"; }
+
+require_tools() {
+  command -v git >/dev/null || die "git not found"
+  command -v wtp >/dev/null || die "wtp not found (https://github.com/satococoa/wtp)"
+}
+
+locate_repo() {
+  git rev-parse --git-dir >/dev/null 2>&1 || return 1
+  ORIG_PWD=$(pwd -P)
+  CUR_BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  MAIN=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+  [ -n "$MAIN" ] || die "cannot locate main worktree"
+  cd "$MAIN"   # we may be standing in a worktree we are about to delete
+}
+
+load_config() {
+  MASTER=$(cfg branch.master)
+  DEVELOP=$(cfg branch.develop)
+  P_WORK=$(cfg prefix.work work/)
+  P_RELEASE=$(cfg prefix.release release/)
+  P_HOTFIX=$(cfg prefix.hotfix hotfix/)
+  VTAG=$(cfg prefix.versiontag)
+}
+
+require_init() {
+  [ -n "$MASTER" ] && [ -n "$DEVELOP" ] && branch_exists "$MASTER" && branch_exists "$DEVELOP" \
+    || die "Not a wtp-flow-enabled repo yet. Please run '$PROG init' first."
+}
+
+prefix_of() { case $1 in work) printf %s "$P_WORK";; release) printf %s "$P_RELEASE";; hotfix) printf %s "$P_HOTFIX";; esac; }
+base_of()   { case $1 in work|release) printf %s "$DEVELOP";; hotfix) printf %s "$MASTER";; esac; }
+
+# ------------------------------------------------------------- git helpers --
+
+branch_exists()  { git show-ref --verify --quiet "refs/heads/$1"; }
+tag_exists()     { git show-ref --verify --quiet "refs/tags/$1"; }
+has_remote()     { git remote get-url origin >/dev/null 2>&1; }
+remote_branch()  { git show-ref --verify --quiet "refs/remotes/origin/$1"; }
+is_ancestor()    { git merge-base --is-ancestor "$1" "$2"; }
+rev()            { git rev-parse --verify -q "$1^{commit}"; }
+
+# Path of the worktree that has branch $1 checked out (empty if none).
+worktree_of() {
+  git worktree list --porcelain | awk -v b="refs/heads/$1" '
+    /^worktree /{p=substr($0,10)} $0=="branch " b {print p; exit}'
+}
+
+require_clean() {
+  [ -z "$(git -C "$1" status --porcelain --untracked-files=no)" ] \
+    || die "Working tree '$1' contains unstaged or uncommitted changes. Aborting."
+}
+
+do_fetch() {
+  has_remote || die "Could not fetch: no remote named 'origin'."
+  git fetch -q origin || die "Could not fetch from origin."
+}
+
+# Refuse to operate when a long-lived branch is behind/diverged from origin.
+check_sync() {
+  has_remote && remote_branch "$1" || return 0
+  local l r; l=$(rev "$1") r=$(rev "origin/$1")
+  [ "$l" = "$r" ] && return 0
+  if is_ancestor "$r" "$l"; then return 0; fi
+  if is_ancestor "$l" "$r"; then
+    die "Branch '$1' is behind 'origin/$1'. Update it first (e.g. 'git pull' in its worktree)."
+  fi
+  die "Branches '$1' and 'origin/$1' have diverged."
+}
+
+set_cd() { [ -z "${WTP_FLOW_CDFILE:-}" ] || printf '%s' "$1" >"$WTP_FLOW_CDFILE"; }
+
+# --------------------------------------------------------- worktree helpers -
+
+# Create a worktree for an existing local/remote branch; print its path.
+add_worktree() {
+  local out
+  out=$(wtp add "$1" --quiet) || die "wtp add failed for '$1'"
+  printf '%s\n' "$out" | tail -n1
+}
+
+ensure_worktree() {
+  local d; d=$(worktree_of "$1")
+  [ -n "$d" ] || d=$(add_worktree "$1")
+  printf '%s\n' "$d"
+}
+
+# run_on BRANCH CMD... — run in a worktree of BRANCH (existing, or throwaway).
+run_on() {
+  local branch=$1; shift
+  local dir tmp=
+  dir=$(worktree_of "$branch")
+  if [ -n "$dir" ]; then
+    require_clean "$dir"
+  else
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/wtp-flow.XXXXXX")
+    git worktree add -q "$tmp" "$branch"
+    dir=$tmp
+  fi
+  local rc=0
+  (cd "$dir" && "$@") || rc=$?
+  [ -z "$tmp" ] || git worktree remove --force "$tmp"
+  return $rc
+}
+
+_do_merge() {
+  case $MI_MODE in
+    squash)
+      if git merge --squash "$MI_SRC" && { git diff --cached --quiet || git commit -q --no-edit; }; then return 0; fi
+      git reset -q --hard HEAD; return 1 ;;
+    noff) git merge --no-ff --no-edit "$MI_SRC" || { git merge --abort 2>/dev/null; return 1; } ;;
+    *)    git merge --no-edit "$MI_SRC"         || { git merge --abort 2>/dev/null; return 1; } ;;
+  esac
+}
+
+# merge_into TARGET SOURCE MODE(ff|noff|squash) [HINT]
+merge_into() {
+  MI_SRC=$2 MI_MODE=$3
+  run_on "$1" _do_merge || die "There were merge conflicts merging '$2' into '$1'. Nothing was changed.
+${4:-Resolve them from the topic branch (git merge $1), then re-run the command.}"
+}
+
+# --------------------------------------------------------------- options ----
+
+# parse_opts KIND SUB args... → flags + ARGS[]
+parse_opts() {
+  local kind=$1 sub=$2; shift 2
+  FETCH=0 REBASE=0 PRESERVE=0 PUSH=0 KEEP_L=0 KEEP_R=0 FORCE=0 SQUASH=0 NOFF=0
+  SIGN=0 SIGNKEY= MSG= MSGFILE= NOTAG=0 NOBACK=0 TAGNAME= FFMASTER=0 REMOTE=0
+  INTERACTIVE=0 VERBOSE=0
+  ARGS=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -F|--fetch) FETCH=1 ;;
+      -r|--rebase|--remote)
+        if [ "$sub" = delete ]; then REMOTE=1; else REBASE=1; fi ;;
+      -p|--preserve-merges|--push)
+        if [ "$1" = -p ] && { [ "$sub" = rebase ] || { [ "$sub" = finish ] && [ "$kind" = work ]; }; }; then PRESERVE=1
+        elif [ "$1" = --preserve-merges ]; then PRESERVE=1
+        else PUSH=1; fi ;;
+      --pushproduction|--pushdevelop|--pushtag) PUSH=1 ;;
+      -k|--keep) KEEP_L=1 KEEP_R=1 ;;
+      --keeplocal) KEEP_L=1 ;;
+      --keepremote) KEEP_R=1 ;;
+      -D|--force_delete) FORCE=1 ;;
+      -f|--force)
+        if [ "$sub" = finish ]; then MSGFILE=$(abs_path "${2:?-f needs a file}"); shift; else FORCE=1; fi ;;
+      -S|--squash) SQUASH=1 ;;
+      --no-ff) NOFF=1 ;;
+      --ff-master) FFMASTER=1 ;;
+      -s|--sign) SIGN=1 ;;
+      -u|--signingkey) SIGNKEY=${2:?-u needs a key}; shift ;;
+      -m|--message) MSG=${2:?-m needs a message}; shift ;;
+      --messagefile) MSGFILE=$(abs_path "${2:?needs a file}"); shift ;;
+      -n|--notag) NOTAG=1 ;;
+      -b|--nobackmerge|--nodevelopmerge) NOBACK=1 ;;
+      -T|--tagname) TAGNAME=${2:?-T needs a name}; shift ;;
+      -i|--interactive) INTERACTIVE=1 ;;
+      -v|--verbose) VERBOSE=1 ;;
+      --showcommands) export GIT_TRACE=1 ;;
+      -h|--help) usage_$kind 2>/dev/null || usage; exit 0 ;;
+      --) shift; ARGS+=("$@"); break ;;
+      -*) die "Unknown option '$1'. See '$PROG $kind $sub --help'." ;;
+      *) ARGS+=("$1") ;;
+    esac
+    shift
+  done
+}
+
+# We cd to the main worktree at startup, so user-supplied relative paths need the original cwd.
+abs_path() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$ORIG_PWD" "$1" ;; esac; }
+
+arg() { printf '%s' "${ARGS[$1]:-}"; }
+
+# Resolve a user-supplied name (or the current branch) to a full branch name.
+resolve_branch() {
+  local kind=$1 name=${2:-} prefix; prefix=$(prefix_of "$kind")
+  if [ -z "$name" ]; then
+    case "$CUR_BRANCH" in
+      "$prefix"*) printf '%s' "$CUR_BRANCH"; return ;;
+    esac
+    printf 'The current HEAD is no %s branch.\nPlease specify a <name> argument.\n' "$kind" >&2
+    exit 1
+  fi
+  name=${name#"$prefix"}
+  if branch_exists "$prefix$name"; then printf '%s' "$prefix$name"; return; fi
+  if [ "$kind" = work ]; then
+    local m n
+    m=$(git for-each-ref --format='%(refname:short)' "refs/heads/$prefix$name*")
+    n=$(printf '%s' "$m" | grep -c . || true)
+    [ "$n" -le 1 ] || die "Multiple branches match prefix '$name':
+$m"
+    [ "$n" -eq 1 ] && { printf '%s' "$m"; return; }
+  fi
+  die "Branch '$prefix$name' does not exist and is required."
+}
+
+# ------------------------------------------------------------------ init ----
+
+ask() { # var prompt default
+  local v
+  read -r -p "$2 [$3]: " v || v=
+  printf -v "$1" '%s' "${v:-$3}"
+}
+
+# ------------------------------------------------------------ worktree dir --
+# The worktree location is wtp's `defaults.base_dir` in .wtp.yml (relative paths
+# resolve against the main worktree). That file is the single source of truth.
+
+DEFAULT_BASEDIR="../worktrees"
+
+get_basedir() {
+  local v=
+  [ ! -f "$MAIN/.wtp.yml" ] || v=$(sed -n 's/^[[:space:]]*base_dir:[[:space:]]*//p' "$MAIN/.wtp.yml" | head -n1 | sed -e 's/[[:space:]]*#.*$//' -e "s/^[\"']//" -e "s/[\"']\$//")
+  printf '%s' "${v:-$DEFAULT_BASEDIR}"
+}
+
+set_basedir() { # dir
+  local dir=$1 f="$MAIN/.wtp.yml"
+  case $dir in *\"*|*\\*) die "worktree directory may not contain quotes or backslashes" ;; esac
+  [ -n "$dir" ] || die "worktree directory may not be empty"
+  if [ ! -f "$f" ]; then
+    cat >"$f" <<YML
+version: "1.0"
+defaults:
+  base_dir: "$dir"
+# hooks:
+#   post_create:
+#     - type: copy
+#       from: ".env"
+#       to: ".env"
+YML
+  elif grep -q '^[[:space:]]*base_dir:' "$f"; then
+    D=$dir awk '/^[[:space:]]*base_dir:/ && !done { match($0, /^[[:space:]]*/); print substr($0, 1, RLENGTH) "base_dir: \"" ENVIRON["D"] "\""; done=1; next } { print }' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  elif grep -q '^defaults:' "$f"; then
+    D=$dir awk '{ print } /^defaults:/ && !done { print "  base_dir: \"" ENVIRON["D"] "\""; done=1 }' "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+  else
+    printf 'defaults:\n  base_dir: "%s"\n' "$dir" >>"$f"
+  fi
+}
+
+cmd_init() {
+  local defaults=0 force=0 pw= pr= px= pt= wd= set_d=0
+  pw=$P_WORK pr=$P_RELEASE px=$P_HOTFIX pt=$VTAG
+  local set_w=0 set_r=0 set_x=0 set_t=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -d|--defaults) defaults=1 ;;
+      -f|--force) force=1 ;;
+      -p|--feature|--work) pw=${2:?}; set_w=1; shift ;;
+      -r|--release) pr=${2:?}; set_r=1; shift ;;
+      -x|--hotfix) px=${2:?}; set_x=1; shift ;;
+      -t|--tag) pt=${2-}; set_t=1; shift ;;
+      -w|--worktrees) wd=${2:?-w needs a directory}; set_d=1; shift ;;
+      --showcommands) export GIT_TRACE=1 ;;
+      -h|--help) usage_init; return ;;
+      *) die "Unknown option '$1'" ;;
+    esac
+    shift
+  done
+
+  if [ -n "$MASTER" ] && [ -n "$DEVELOP" ] && branch_exists "$MASTER" && branch_exists "$DEVELOP" && [ $force -eq 0 ]; then
+    say "Already initialized for wtp-flow."
+    say "To force reinitialization, use: $PROG init -f"
+    exit 1
+  fi
+
+  if ! git rev-parse --verify -q HEAD >/dev/null; then
+    git commit -q --allow-empty -m "Initial commit"
+  fi
+
+  local m_default=master
+  branch_exists master || { branch_exists main && m_default=main; }
+  [ -z "$MASTER" ] || m_default=$MASTER
+  local d_default=${DEVELOP:-develop}
+  local interactive=0
+  [ $defaults -eq 0 ] && [ -t 0 ] && interactive=1
+
+  local m=$m_default d=$d_default
+  if [ $interactive -eq 1 ]; then
+    ask m "Branch name for production releases" "$m_default"
+    ask d "Branch name for \"next release\" development" "$d_default"
+    say; say "How to name your supporting branch prefixes?"
+    [ $set_w -eq 1 ] || ask pw "Work branches?" "$pw"
+    [ $set_r -eq 1 ] || ask pr "Release branches?" "$pr"
+    [ $set_x -eq 1 ] || ask px "Hotfix branches?" "$px"
+    [ $set_t -eq 1 ] || ask pt "Version tag prefix?" "$pt"
+    say
+    [ $set_d -eq 1 ] || { ask wd "Directory for worktrees (relative to the repo, or absolute)?" "$(get_basedir)"; set_d=1; }
+  fi
+
+  [ "$m" != "$d" ] || die "Production and development branches must differ."
+  branch_exists "$m" || { say "Creating branch '$m' from current HEAD"; git branch "$m"; }
+  if ! branch_exists "$d"; then
+    if remote_branch "$d"; then git branch --track "$d" "origin/$d"
+    else git branch "$d" "$m"; fi
+  fi
+
+  git config wtpflow.branch.master "$m"
+  git config wtpflow.branch.develop "$d"
+  git config wtpflow.prefix.work "$pw"
+  git config wtpflow.prefix.release "$pr"
+  git config wtpflow.prefix.hotfix "$px"
+  git config wtpflow.prefix.versiontag "$pt"
+  load_config
+
+  if [ $set_d -eq 1 ]; then
+    set_basedir "$wd"
+    say "Worktrees will be created in '$wd'."
+  elif [ ! -f "$MAIN/.wtp.yml" ]; then
+    set_basedir "$DEFAULT_BASEDIR"
+    say "Wrote .wtp.yml (worktrees live in $DEFAULT_BASEDIR)"
+  fi
+
+  # The main worktree rests on develop, like git-flow leaves you.
+  if [ "$(git symbolic-ref --short HEAD 2>/dev/null)" != "$d" ] \
+     && [ -z "$(worktree_of "$d")" ] \
+     && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+    git checkout -q "$d"
+  fi
+  say "Initialized: production '$m', development '$d'."
+}
+
+# --------------------------------------------------------------- start ------
+
+start_topic() {
+  local kind=$1; shift
+  parse_opts "$kind" start "$@"
+  local name; name=$(arg 0)
+  [ -n "$name" ] || die "Missing argument <$([ "$kind" = work ] && echo name || echo version)>"
+  local prefix base branch; prefix=$(prefix_of "$kind"); base=$(arg 1)
+  name=${name#"$prefix"}; branch=$prefix$name
+  [ -n "$base" ] || base=$(base_of "$kind")
+
+  [ $FETCH -eq 0 ] || do_fetch
+  case $kind in
+    release|hotfix)
+      local ex; ex=$(git for-each-ref --format='%(refname:short)' "refs/heads/$prefix*" | head -n1)
+      [ -z "$ex" ] || die "There is an existing $kind branch '${ex#"$prefix"}'. Finish that one first."
+      tag_exists "$VTAG$name" && die "Tag '$VTAG$name' already exists. Pick another name." ;;
+  esac
+  rev "$base" >/dev/null || die "Base '$base' does not exist."
+  branch_exists "$branch" && die "Branch '$branch' already exists. Pick another name."
+  remote_branch "$branch" && die "Branch '$branch' already exists on origin. Use '$PROG $kind track $name'."
+  [ "$base" != "$(base_of "$kind")" ] || check_sync "$base"
+
+  local path
+  path=$(wtp add -b "$branch" "$base" --quiet | tail -n1)
+  [ -d "$path" ] || die "wtp did not create a worktree for '$branch'"
+  set_cd "$path"
+  cat <<EOF
+
+Summary of actions:
+- A new branch '$branch' was created, based on '$base'
+- A worktree for it was created at '$path'
+
+Now, start committing on your $kind. When done, use:
+
+     $PROG $kind finish $name
+
+EOF
+}
+
+# -------------------------------------------------------------- finish ------
+
+# Remove the topic's worktree and branch (honouring -k/-D/--keepremote).
+cleanup_branch() {
+  local b=$1 d; d=$(worktree_of "$b")
+  if [ "$d" = "$MAIN" ]; then
+    git checkout -q "$DEVELOP" || die "Cannot leave '$b' in the main worktree; '$DEVELOP' is busy."
+    d=
+  fi
+  if [ -n "$d" ]; then
+    local fl=(); [ $FORCE -eq 0 ] || fl=(--force)
+    # git, not `wtp remove`: wtp looks worktrees up under the current base_dir,
+    # which breaks after base_dir was edited. git knows the real path.
+    if git worktree remove ${fl[@]+"${fl[@]}"} "$d" >/dev/null 2>&1; then
+      say "- Worktree '$d' has been removed"
+      case "$ORIG_PWD/" in "$d"/*) set_cd "$MAIN" ;; esac
+    else
+      warn "could not remove worktree '$d' (untracked files?). Branch '$b' kept."
+      warn "Use -D to force removal."
+      return
+    fi
+  fi
+  if [ $KEEP_L -eq 0 ]; then
+    git branch -q -D "$b"
+    say "- Branch '$b' has been locally deleted"
+  fi
+  if [ $KEEP_R -eq 0 ] && has_remote && remote_branch "$b"; then
+    if git push -q origin --delete "$b"; then say "- Branch '$b' in remote 'origin' has been deleted"
+    else warn "could not delete '$b' from origin"; fi
+  fi
+}
+
+make_tag() { # tag label version
+  local a=(-a)
+  [ $SIGN -eq 0 ] || a=(-s)
+  [ -z "$SIGNKEY" ] || a=(-u "$SIGNKEY")
+  if   [ -n "$MSGFILE" ]; then a+=(-F "$MSGFILE")
+  elif [ -n "$MSG" ];     then a+=(-m "$MSG")
+  elif [ ! -t 0 ];        then a+=(-m "$2 $3")
+  fi
+  git tag "${a[@]}" "$1" "$MASTER"
+}
+
+finish_work() {
+  local b d mode=ff
+  b=$(resolve_branch work "$(arg 0)")
+  d=$(worktree_of "$b"); [ -z "$d" ] || require_clean "$d"
+  [ $FETCH -eq 0 ] || do_fetch
+  check_sync "$DEVELOP"
+
+  if [ $REBASE -eq 1 ]; then
+    d=$(ensure_worktree "$b"); require_clean "$d"
+    local ra=(); [ $PRESERVE -eq 0 ] || ra=(--rebase-merges)
+    (cd "$d" && git rebase ${ra[@]+"${ra[@]}"} "$DEVELOP") \
+      || die "Finish was aborted due to conflicts during rebase.
+Please finish the rebase manually in '$d'.
+Once finished, re-run: $PROG work finish ${b#"$P_WORK"}"
+  fi
+  [ $NOFF -eq 0 ] || mode=noff
+  [ $SQUASH -eq 0 ] || mode=squash
+
+  merge_into "$DEVELOP" "$b" "$mode"
+  say; say "Summary of actions:"
+  say "- The work branch '$b' was merged into '$DEVELOP'"
+  [ $SQUASH -eq 0 ] || say "  (squashed)"
+  cleanup_branch "$b"
+  if [ $PUSH -eq 1 ]; then
+    has_remote || die "No remote 'origin' to push to."
+    git push origin "$DEVELOP:$DEVELOP"; say "- '$DEVELOP' was pushed to origin"
+  fi
+}
+
+finish_release_like() { # kind
+  local kind=$1 b d ver tag label
+  b=$(resolve_branch "$kind" "$(arg 0)")
+  d=$(worktree_of "$b"); [ -z "$d" ] || require_clean "$d"
+  ver=${b#"$(prefix_of "$kind")"}
+  tag=${TAGNAME:-$VTAG$ver}
+  label=$([ "$kind" = release ] && echo Release || echo Hotfix)
+
+  [ $FETCH -eq 0 ] || do_fetch
+  check_sync "$MASTER"; check_sync "$DEVELOP"
+  [ $NOTAG -eq 1 ] || { tag_exists "$tag" && die "Tag '$tag' already exists. Pick another name."; }
+
+  local mode=noff
+  [ "$kind" = release ] && [ $FFMASTER -eq 1 ] && mode=ff
+  [ $SQUASH -eq 0 ] || mode=squash
+  merge_into "$MASTER" "$b" "$mode"
+  say; say "Summary of actions:"
+  say "- $label branch '$b' has been merged into '$MASTER'"
+
+  if [ $NOTAG -eq 0 ]; then
+    make_tag "$tag" "$label" "$ver"
+    say "- The $kind was tagged '$tag'"
+  fi
+  if [ $NOBACK -eq 0 ]; then
+    local src=$MASTER; [ $NOTAG -eq 1 ] || src=$tag
+    merge_into "$DEVELOP" "$src" noff \
+      "'$MASTER' already contains '$b'${tag:+ and is tagged '$tag'}. Merge '$src' into '$DEVELOP' by hand, then delete '$b'."
+    say "- ${label} $([ $NOTAG -eq 1 ] && echo "'$MASTER'" || echo "tag '$tag'") has been back-merged into '$DEVELOP'"
+  fi
+  cleanup_branch "$b"
+  if [ $PUSH -eq 1 ]; then
+    has_remote || die "No remote 'origin' to push to."
+    local refs=("$DEVELOP:$DEVELOP" "$MASTER:$MASTER")
+    [ $NOTAG -eq 1 ] || refs+=("$tag")
+    git push origin "${refs[@]}"
+    say "- '$DEVELOP', '$MASTER'$([ $NOTAG -eq 1 ] || echo " and tag '$tag'") were pushed to origin"
+  fi
+}
+
+cmd_finish() {
+  local kind=$1; shift
+  parse_opts "$kind" finish "$@"
+  if [ "$kind" = work ]; then finish_work; else finish_release_like "$kind"; fi
+  say
+}
+
+# ------------------------------------------------------------ the rest ------
+
+cmd_list() {
+  local kind=$1; shift
+  parse_opts "$kind" list "$@"
+  local prefix base bs b
+  prefix=$(prefix_of "$kind"); base=$(base_of "$kind")
+  bs=$(git for-each-ref --format='%(refname:short)' "refs/heads/$prefix*")
+  if [ -z "$bs" ]; then
+    printf 'No %s branches exist.\n\nYou can start a new %s branch:\n\n    %s %s start <name>\n\n' "$kind" "$kind" "$PROG" "$kind"
+    return
+  fi
+  local w=0 n
+  while read -r b; do n=${b#"$prefix"}; [ ${#n} -le $w ] || w=${#n}; done <<<"$bs"
+  while read -r b; do
+    n=${b#"$prefix"}
+    local mark="  "; [ "$b" != "$CUR_BRANCH" ] || mark="* "
+    if [ $VERBOSE -eq 0 ]; then printf '%s%s\n' "$mark" "$n"; continue; fi
+    local tip bt mb note
+    tip=$(rev "$b"); bt=$(rev "$base"); mb=$(git merge-base "$base" "$b")
+    if   [ "$tip" = "$bt" ]; then note="(no commits yet)"
+    elif [ "$mb" = "$tip" ]; then note="(is merged into $base, can be deleted)"
+    elif [ "$mb" = "$bt" ]; then note="(based on latest $base)"
+    else note="(may be rebased)"; fi
+    printf '%s%-*s %s\n' "$mark" "$w" "$n" "$note"
+  done <<<"$bs"
+}
+
+cmd_publish() {
+  local kind=$1; shift
+  parse_opts "$kind" publish "$@"
+  has_remote || die "Could not push: no remote named 'origin'."
+  local b; b=$(resolve_branch "$kind" "$(arg 0)")
+  git fetch -q origin
+  remote_branch "$b" && die "Branch '$b' already exists on origin."
+  git push -u origin "$b:$b" || die "Could not push branch '$b'."
+  cat <<EOF
+
+Summary of actions:
+- The remote branch '$b' was created or updated
+- The local branch '$b' was configured to track the remote branch
+EOF
+}
+
+cmd_track() {
+  local kind=$1; shift
+  parse_opts "$kind" track "$@"
+  local name; name=$(arg 0); [ -n "$name" ] || die "Missing argument <name>"
+  local prefix b; prefix=$(prefix_of "$kind"); b=$prefix${name#"$prefix"}
+  do_fetch
+  branch_exists "$b" && die "Local branch '$b' already exists."
+  remote_branch "$b" || die "Could not fetch branch '$b' from remote 'origin'."
+  local path; path=$(add_worktree "$b")
+  set_cd "$path"
+  cat <<EOF
+
+Summary of actions:
+- A new remote tracking branch '$b' was created
+- A worktree for it was created at '$path'
+EOF
+}
+
+cmd_pull() {
+  local kind=$1; shift
+  parse_opts "$kind" pull "$@"
+  local remote; remote=$(arg 0); [ -n "$remote" ] || die "Missing argument <remote>"
+  local b; b=$(resolve_branch "$kind" "$(arg 1)" 2>/dev/null) || b=$(prefix_of "$kind")${ARGS[1]:-}
+  git fetch -q "$remote"
+  if branch_exists "$b"; then
+    local d; d=$(ensure_worktree "$b")
+    (cd "$d" && git pull --ff-only "$remote" "$b")
+  else
+    git show-ref --verify --quiet "refs/remotes/$remote/$b" || die "Branch '$b' not found on '$remote'."
+    git branch --track "$b" "$remote/$b"
+    set_cd "$(add_worktree "$b")"
+  fi
+}
+
+cmd_diff() {
+  local kind=$1; shift
+  parse_opts "$kind" diff "$@"
+  local b; b=$(resolve_branch "$kind" "$(arg 0)")
+  git diff "$(git merge-base "$(base_of "$kind")" "$b")..$b"
+}
+
+cmd_rebase() {
+  local kind=$1; shift
+  parse_opts "$kind" rebase "$@"
+  local b d ra=(); b=$(resolve_branch "$kind" "$(arg 0)")
+  [ $INTERACTIVE -eq 0 ] || ra+=(-i)
+  [ $PRESERVE -eq 0 ]    || ra+=(--rebase-merges)
+  d=$(ensure_worktree "$b")
+  say "Will try to rebase '${b#"$(prefix_of "$kind")"}'..."
+  (cd "$d" && git rebase ${ra[@]+"${ra[@]}"} "$(base_of "$kind")")
+}
+
+cmd_checkout() {
+  local kind=$1; shift
+  parse_opts "$kind" checkout "$@"
+  local b d; b=$(resolve_branch "$kind" "$(arg 0)")
+  d=$(ensure_worktree "$b")
+  set_cd "$d"
+  say "$d"
+}
+
+cmd_delete() {
+  local kind=$1; shift
+  parse_opts "$kind" delete "$@"
+  local name; name=$(arg 0); [ -n "$name" ] || die "Missing argument <name>"
+  local b base; b=$(resolve_branch "$kind" "$name"); base=$(base_of "$kind")
+  if [ $FORCE -eq 0 ]; then
+    is_ancestor "$b" "$base" || die "Branch '$b' has been not been merged into '$base'. Use -f to force the deletion."
+  fi
+  FORCE=$FORCE KEEP_L=0 KEEP_R=${KEEP_R:-0}
+  [ $REMOTE -eq 1 ] || KEEP_R=1
+  say "Summary of actions:"
+  cleanup_branch "$b"
+}
+
+cmd_topic() {
+  local kind=$1; shift
+  local sub=${1:-list}
+  case $sub in -*) sub=list ;; *) [ $# -eq 0 ] || shift ;; esac
+  case $sub in
+    list)     cmd_list     "$kind" "$@" ;;
+    start)    start_topic  "$kind" "$@" ;;
+    finish)   cmd_finish   "$kind" "$@" ;;
+    publish)  cmd_publish  "$kind" "$@" ;;
+    track)    cmd_track    "$kind" "$@" ;;
+    delete)   cmd_delete   "$kind" "$@" ;;
+    checkout) cmd_checkout "$kind" "$@" ;;
+    help)     usage_topic "$kind" ;;
+    diff|rebase|pull)
+      [ "$kind" = work ] || die "'$sub' is only available for work branches."
+      "cmd_$sub" "$kind" "$@" ;;
+    *) usage_topic "$kind" >&2; exit 1 ;;
+  esac
+}
+
+# ----------------------------------------------------------------- misc -----
+
+# relocate [-n] — move topic worktrees to <base_dir>/<branch> after base_dir changed.
+cmd_relocate() {
+  local dry=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -n|--dry-run) dry=1 ;;
+      -h|--help) usage_relocate; return ;;
+      *) die "Unknown option '$1'" ;;
+    esac
+    shift
+  done
+  local base; base=$(get_basedir)
+  case $base in /*) ;; *) base=$MAIN/$base ;; esac
+  base=$(realpath -m "$base")
+
+  local moves=() skipped=() path branch locked target
+  while IFS=$'\t' read -r path branch locked; do
+    [ "$path" != "$MAIN" ] && [ -n "$branch" ] || continue
+    case $branch in
+      "$P_WORK"*|"$P_RELEASE"*|"$P_HOTFIX"*) ;;
+      *) continue ;;
+    esac
+    target=$base/$branch
+    [ "$path" != "$target" ] || continue
+    if   [ ! -d "$path" ]; then skipped+=("$branch: $path is missing (try 'git worktree prune')")
+    elif [ -n "$locked" ]; then skipped+=("$branch: worktree is locked")
+    elif [ -e "$target" ]; then skipped+=("$branch: $target already exists")
+    elif case "$ORIG_PWD/" in "$path"/*) true ;; *) false ;; esac; then
+      die "You are inside the worktree of '$branch'; cd out of it (e.g. to $MAIN) and re-run."
+    else moves+=("$path"$'\t'"$target"$'\t'"$branch"); fi
+  done < <(git worktree list --porcelain | awk '
+    /^worktree /{ if (p) print p "\t" b "\t" l; p=substr($0,10); b=""; l="" }
+    /^branch /{ b=substr($0,8); sub("^refs/heads/","",b) }
+    /^locked/{ l="1" }
+    END{ if (p) print p "\t" b "\t" l }')
+
+  local m
+  for m in ${skipped[@]+"${skipped[@]}"}; do warn "skipping $m"; done
+  if [ ${#moves[@]} -eq 0 ]; then say "Nothing to relocate; topic worktrees are already under $base."; return; fi
+  for m in "${moves[@]}"; do
+    IFS=$'\t' read -r path target branch <<<"$m"
+    if [ $dry -eq 1 ]; then say "would move $branch: $path -> $target"; continue; fi
+    mkdir -p "$(dirname "$target")"
+    git worktree move "$path" "$target"
+    say "moved $branch: $path -> $target"
+    # tidy up empty parent dirs left behind (stops at the first non-empty one)
+    rmdir -p --ignore-fail-on-non-empty "$(dirname "$path")" 2>/dev/null || true
+  done
+}
+
+cmd_config() {
+  case ${1:-} in
+    basedir|worktrees)
+      if [ -z "${2:-}" ]; then get_basedir; echo; return; fi
+      set_basedir "$2"
+      say "Worktrees will be created in '$2' from now on."
+      say "Existing worktrees are not moved. Run '$PROG relocate' to move them."
+      return ;;
+    ""|list) ;;
+    *) die "usage: $PROG config [basedir [<dir>]]" ;;
+  esac
+  say "Production branch  : $MASTER"
+  say "Development branch : $DEVELOP"
+  say "Work prefix        : $P_WORK"
+  say "Release prefix     : $P_RELEASE"
+  say "Hotfix prefix      : $P_HOTFIX"
+  say "Version tag prefix : $VTAG"
+  say "Worktree directory : $(get_basedir)"
+}
+
+cmd_shell_init() {
+  cat <<'EOF'
+# eval "$(wtp-flow shell-init)"
+wtp-flow() {
+  local f rc d
+  f=$(mktemp) || return 1
+  WTP_FLOW_CDFILE=$f command wtp-flow "$@"; rc=$?
+  if [ -s "$f" ]; then d=$(cat "$f"); [ -d "$d" ] && builtin cd "$d"; fi
+  rm -f "$f"
+  return $rc
+}
+EOF
+}
+
+usage_relocate() {
+  cat <<EOF
+usage: $PROG relocate [-n|--dry-run]
+Move existing topic worktrees to <base_dir>/<branch> (see '$PROG config basedir').
+EOF
+}
+
+usage_init() {
+  cat <<EOF
+usage: $PROG init [-d] [-f] [-p <work>] [-r <release>] [-x <hotfix>] [-t <tag>] [-w <worktree-dir>]
+EOF
+}
+
+usage_topic() {
+  local k=$1 extra=
+  [ "$k" != work ] || extra="
+   $PROG work diff [name]
+   $PROG work rebase [-i] [-p] [name]
+   $PROG work pull <remote> [name]"
+  cat <<EOF
+usage: $PROG $k [list] [-v]
+   $PROG $k start [-F] <$([ $k = work ] && echo name || echo version)> [<base>]
+   $PROG $k finish [-F] [-r] [-p] [-k] [-D] [-S] [--no-ff] [<name>]    (work)
+   $PROG $k finish [-F] [-s] [-u key] [-m msg | -f file] [-p] [-k] [-n] [-b] [-S] [-T tag] [<version>]
+   $PROG $k publish [<name>]
+   $PROG $k track <name>
+   $PROG $k checkout [<name>]
+   $PROG $k delete [-f] [-r] <name>$extra
+EOF
+}
+usage_work()    { usage_topic work; }
+usage_release() { usage_topic release; }
+usage_hotfix()  { usage_topic hotfix; }
+
+usage() {
+  cat <<EOF
+usage: $PROG <subcommand>
+
+Subcommands:
+   init       Initialize a new repo with the git-flow branch layout
+   work       Manage work branches    (git-flow: feature)
+   release    Manage release branches
+   hotfix     Manage hotfix branches
+   config     Show or change configuration (e.g. 'config basedir <dir>')
+   relocate   Move existing worktrees to the configured directory
+   shell-init Print a shell function so start/track/checkout cd you
+   version    Show version information
+
+Try '$PROG <subcommand> help' for details.
+Every topic branch gets its own worktree (via wtp). 'feature' is an alias of 'work'.
+EOF
+}
+
+main() {
+  local cmd=${1:-help}; [ $# -eq 0 ] || shift
+  case $cmd in
+    help|-h|--help) usage; return ;;
+    version|-v|--version) echo "$VERSION"; return ;;
+    shell-init) cmd_shell_init; return ;;
+  esac
+  require_tools
+  if ! locate_repo; then
+    if [ "$cmd" = init ]; then git init -q -b master; locate_repo
+    else die "Not a git repository"; fi
+  fi
+  load_config
+  case $cmd in
+    init) cmd_init "$@"; return ;;
+  esac
+  require_init
+  case $cmd in
+    work|feature) cmd_topic work "$@" ;;
+    release)      cmd_topic release "$@" ;;
+    hotfix)       cmd_topic hotfix "$@" ;;
+    config)       cmd_config "$@" ;;
+    relocate)     cmd_relocate "$@" ;;
+    *) usage >&2; exit 1 ;;
+  esac
+}
+
+main "$@"
