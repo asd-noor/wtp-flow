@@ -73,6 +73,14 @@ use a non-zero exit code. Read the message; common ones are in [troubleshooting]
 Key one: a **merge conflict** aborts the merge and changes nothing. Go to the topic worktree, run
 `git merge develop` (or `master` for hotfixes), resolve, commit, then re-run `finish`.
 
+## Relation to plain wtp
+
+wtp-flow sits on top of `wtp`. For worktree hooks (`post_create` copy/symlink/command in `.wtp.yml`), `wtp
+list`, `wtp exec` and other raw wtp usage, use the separate wtp skill (`skill/wtp`). But inside a wtp-flow
+repo, do **not** create or remove `work/`, `release/` or `hotfix/` branches with `wtp add -b` or `wtp
+remove`: that skips the flow's base branch, open-release checks, tagging and merge steps, and `wtp remove`
+only finds worktrees under the current `base_dir`. Use `wtp-flow <type> start|finish|delete` for those.
+
 ## More
 
 - Every command and flag: [references/commands.md](references/commands.md)
